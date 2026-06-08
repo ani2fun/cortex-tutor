@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env / secrets — NEVER commit keys
+.env
+.env.local
+*.key
+*.pem
+
+# Build
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Note: uv.lock IS committed (reproducible builds) — do not ignore it.
