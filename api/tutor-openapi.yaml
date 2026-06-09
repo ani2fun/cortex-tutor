@@ -310,7 +310,13 @@ components:
       type: object
       required: [problemId]
       properties:
-        problemId: { type: string, example: "data-structures-and-algorithms/arrays/two-sum" }
+        problemId:
+          type: string
+          description: |
+            The cortex chapter's join key: `<book>/<hierarchical-chapter-slug>`, identical to the
+            chapter's frontend URL path. The slug mirrors the directory tree (ordering prefixes
+            stripped), so it's stable across chapter reordering.
+          example: "data-structures-and-algorithms/linear-structures/arrays/pattern-two-pointers-reduction/problems/two-sum"
         origin:
           allOf: [{ $ref: "#/components/schemas/SessionOrigin" }]
           default: your_turn
