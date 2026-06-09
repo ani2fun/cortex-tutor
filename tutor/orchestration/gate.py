@@ -29,9 +29,10 @@ def gate_tool_schema() -> dict:
 
 
 def build_gate_system(step: Step, problem_context: str) -> str:
-    """The stable rubric system + the current step's gate criterion + the grounded problem."""
+    """The lean grader prompt + the current step's gate criterion + the grounded problem. Uses the
+    gate-specific prompt (not the full coach rubric) to keep the prompt small for CPU inference."""
     return (
-        f"{loader.system_prompt()}\n\n"
+        f"{loader.gate_prompt()}\n\n"
         f"---\n\n## Current step: {step.value}\n\n{loader.step_guide(step)}\n\n"
         f"---\n\n## Problem context\n\n{problem_context}"
     )

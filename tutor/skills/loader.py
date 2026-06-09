@@ -41,6 +41,13 @@ def system_prompt() -> str:
     return _read("rubric/system.md") + "\n\n---\n\n" + _read("verdict-contract.md")
 
 
+@lru_cache(maxsize=1)
+def gate_prompt() -> str:
+    """The lean grader prompt for the GATE call (``rubric/gate.md``) — far smaller than the coach
+    system prompt, which matters a lot for CPU-bound (Ollama) inference latency."""
+    return _read("rubric/gate.md")
+
+
 @lru_cache(maxsize=len(Step))
 def step_guide(step: Step) -> str:
     """The gate criterion + pass threshold + anti-leak guidance for one step."""

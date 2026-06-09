@@ -101,7 +101,7 @@ async def test_irreparable_output_fails_safe_to_retry():
 
 def test_gate_system_includes_rubric_step_guide_and_problem():
     sys = gate.build_gate_system(Step.EXAMPLES, PROBLEM)
-    assert "Cortex Tutor" in sys  # the rubric system prompt
+    assert "grading" in sys.lower()  # the lean gate grader prompt
     assert "Step 2 — examples" in sys  # the current step's guide
     assert PROBLEM in sys  # the grounded problem context
 

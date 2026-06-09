@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     ollama_url: str | None = None
     ollama_model: str | None = None
     force_local: bool = False
+    ollama_timeout: int = 180  # CPU inference is slow; generous read timeout for the gate call
 
     # ── Postgres (asyncpg driver) ──
     database_url: str = "postgresql+asyncpg://cortex:cortex@localhost:5432/cortex"

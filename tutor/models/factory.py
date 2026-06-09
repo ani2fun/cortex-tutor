@@ -20,9 +20,9 @@ def make_gate_provider(settings: Settings) -> GateProvider:
     model = settings.ollama_model or _DEFAULT_OLLAMA_MODEL
 
     if prefer_ollama and settings.ollama_url:
-        return OllamaGateProvider(settings.ollama_url, model)
+        return OllamaGateProvider(settings.ollama_url, model, timeout=settings.ollama_timeout)
     if settings.anthropic_api_key:
         return AnthropicGateProvider(settings.anthropic_api_key, settings.gate_model)
     if settings.ollama_url:
-        return OllamaGateProvider(settings.ollama_url, model)
+        return OllamaGateProvider(settings.ollama_url, model, timeout=settings.ollama_timeout)
     raise RuntimeError("No gate provider configured: set OLLAMA_URL (local dev) or ANTHROPIC_API_KEY.")
