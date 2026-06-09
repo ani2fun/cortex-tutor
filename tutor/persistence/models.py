@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Identity,
     Integer,
     Numeric,
     String,
@@ -105,7 +106,7 @@ class GroundingRef(Base):
     __table_args__: ClassVar = {"schema": SCHEMA}
 
     session_id: Mapped[UUID] = mapped_column(_fk("session"), primary_key=True)
-    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     step: Mapped[str] = mapped_column(String)
     tool: Mapped[str] = mapped_column(Text)
     citation_url: Mapped[str | None] = mapped_column(Text, nullable=True)

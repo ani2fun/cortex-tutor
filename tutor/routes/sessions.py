@@ -23,6 +23,8 @@ from sse_starlette.sse import EventSourceResponse
 from tutor.auth import CurrentPrincipal
 from tutor.config import get_settings
 from tutor.domain.steps import Step
+from tutor.grounding import context as grounding_context
+from tutor.grounding.mcp_client import GroundingClient
 from tutor.models.base import CoachProvider, GateProvider
 from tutor.models.factory import make_coach_provider, make_gate_provider
 from tutor.orchestration import coach as coach_orch
@@ -44,14 +46,6 @@ def _now_ms() -> int:
     return _ms(dt.datetime.now(dt.UTC))
 
 
-def _problem_context(problem_id: str) -> str:
-    return (
-        f"Problem id: {problem_id}\n"
-        "(The full problem statement is supplied by the MCP grounding server in a later phase; for "
-        "now the gate reasons from the conversation and this id.)"
-    )
-
-
 # Providers are memoised on app.state so the underlying HTTP/SDK clients are pooled across requests
 # (the env-derived provider choice is static per process). BYOK — per-user keys — is client-direct,
 # so it never instantiates a server-side provider here.
@@ -69,6 +63,15 @@ def _coach_provider(request: Request) -> CoachProvider:
         provider = make_coach_provider(get_settings())
         request.app.state.coach_provider = provider
     return provider
+
+
+def _grounding_client(request: Request) -> GroundingClient:
+    client = getattr(request.app.state, "grounding_client", None)
+    if client is None:
+        s = get_settings()
+        client = GroundingClient(s.mcp_url, s.mcp_service_token)
+        request.app.state.grounding_client = client
+    return client
 
 
 def _coach_message(step_value: str, content: str, created_ms: int) -> dict:
@@ -175,7 +178,13 @@ async def submit_turn(
         s = await repo.get_for_user(db, session_id, principal.sub)
         if s is None:
             raise HTTPException(status_code=404, detail="session not found")
-        problem_ctx = _problem_context(s.problem_id)
+        # Grounded context for THIS step: the worked solution is folded in only at implement/test
+        # (the context-withholding leak control). Degrades to an id-only context if MCP is down.
+        # (Fetching it concurrently with the gate's prompt assembly is a later optimisation.)
+        grounded = await _grounding_client(request).get_lesson(
+            s.problem_id, include_solution=grounding_context.wants_solution(step)
+        )
+        problem_ctx = grounding_context.build_problem_context(s.problem_id, grounded, step=step)
         try:
             outcome = await turn_orch.apply_turn(
                 db,
@@ -210,6 +219,18 @@ async def submit_turn(
         verdict = outcome.verdict
         advanced = outcome.advanced
         completed = outcome.completed
+
+        # Audit the grounding used (best-effort; skip on replay). apply_turn already committed, so
+        # this is a small follow-up commit on the same session.
+        if grounded and grounded.get("citationUrl") and not replayed:
+            await repo.add_grounding_ref(
+                db,
+                session_id=session_id_val,
+                step=evaluated_step.value,
+                tool="get_lesson",
+                citation_url=grounded["citationUrl"],
+            )
+            await db.commit()
 
     coach_provider = _coach_provider(request)
 

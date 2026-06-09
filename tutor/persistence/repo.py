@@ -132,9 +132,7 @@ async def append_message(
     return msg
 
 
-async def load_recent_messages(
-    db: AsyncSession, session_id: UUID, limit: int = 40
-) -> list[models.Message]:
+async def load_recent_messages(db: AsyncSession, session_id: UUID, limit: int = 40) -> list[models.Message]:
     """The bounded verbatim window (excludes system rows), returned oldest-first for the prompt."""
     stmt = (
         select(models.Message)
@@ -147,9 +145,7 @@ async def load_recent_messages(
     return rows
 
 
-async def find_by_turn(
-    db: AsyncSession, session_id: UUID, turn_id: UUID
-) -> models.Message | None:
+async def find_by_turn(db: AsyncSession, session_id: UUID, turn_id: UUID) -> models.Message | None:
     """Idempotency lookup — has this learner-answer turn already been recorded?"""
     stmt = select(models.Message).where(
         models.Message.session_id == session_id,
@@ -239,3 +235,23 @@ async def abandon_active(db: AsyncSession, user_sub: str, problem_id: str) -> in
         .values(status="abandoned", updated_at=_now())
     )
     return (await db.execute(stmt)).rowcount
+
+
+async def add_grounding_ref(
+    db: AsyncSession,
+    *,
+    session_id: UUID,
+    step: str,
+    tool: str,
+    citation_url: str | None = None,
+) -> None:
+    """Audit a grounding lookup used for a turn. ``seq`` is a DB IDENTITY column, so it's omitted."""
+    await db.execute(
+        pg_insert(models.GroundingRef).values(
+            session_id=session_id,
+            step=step,
+            tool=tool,
+            citation_url=citation_url,
+            created_at=_now(),
+        )
+    )
