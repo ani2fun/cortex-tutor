@@ -50,7 +50,7 @@ async def sessionmaker() -> AsyncIterator[async_sessionmaker]:
 async def test_pass_advances_and_persists(sessionmaker: async_sessionmaker):
     user, problem = f"itest-{uuid4()}", "itest/two-sum"
     async with sessionmaker() as db:
-        out = await turn_orch.run_turn(
+        out = await turn_orch.apply_turn(
             db,
             provider=FakeGate("pass", 80),
             user_sub=user,
@@ -63,20 +63,33 @@ async def test_pass_advances_and_persists(sessionmaker: async_sessionmaker):
     assert out.verdict.verdict is Verdict.PASS
     assert out.advanced is True
     assert out.session.current_step == Step.EXAMPLES.value
+    # The transcript the coach responds to ends with the learner's answer.
+    assert out.coach_messages[-1]["role"] == "user"
+    assert out.coach_messages[-1]["content"].startswith("I restate it as")
 
     async with sessionmaker() as db:
         s = await repo.get_active(db, user, problem)
         assert s is not None
         assert s.current_step == Step.EXAMPLES.value
         assert s.version == 1
+        # apply_turn persists only the learner's answer; the coach reply is recorded after streaming.
         msgs = await repo.load_recent_messages(db, s.id)
-        assert [m.role for m in msgs] == ["user", "coach"]  # answer + placeholder coach reply
+        assert [m.role for m in msgs] == ["user"]
+
+    # The coach reply is persisted separately (what the SSE route does once the stream completes).
+    async with sessionmaker() as db:
+        await turn_orch.record_coach_reply(
+            db, session_id=out.session.id, step=Step.CLARIFY, content="Nice — let's look at examples."
+        )
+    async with sessionmaker() as db:
+        msgs = await repo.load_recent_messages(db, out.session.id)
+        assert [m.role for m in msgs] == ["user", "coach"]
 
 
 async def test_retry_stays_and_counts_attempt(sessionmaker: async_sessionmaker):
     user, problem = f"itest-{uuid4()}", "itest/two-sum-retry"
     async with sessionmaker() as db:
-        out = await turn_orch.run_turn(
+        out = await turn_orch.apply_turn(
             db,
             provider=FakeGate("retry", 0),
             user_sub=user,
@@ -97,7 +110,7 @@ async def test_wrong_step_raises_mismatch(sessionmaker: async_sessionmaker):
     async with sessionmaker() as db:
         # fresh session starts at CLARIFY; submitting PLAN must be rejected
         with pytest.raises(turn_orch.StepMismatch):
-            await turn_orch.run_turn(
+            await turn_orch.apply_turn(
                 db,
                 provider=FakeGate("pass", 80),
                 user_sub=user,

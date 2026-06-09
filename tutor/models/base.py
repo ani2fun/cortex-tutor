@@ -4,6 +4,7 @@ Anthropic / Ollama / BYOK paths slot behind one interface.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 #: An OpenAI/Anthropic-style chat message: ``{"role": "user"|"assistant", "content": "..."}``.
@@ -30,6 +31,6 @@ class GateProvider(Protocol):
 
 @runtime_checkable
 class CoachProvider(Protocol):
-    """Streams the coach reply token-by-token. Implemented in P3 (coach + SSE)."""
+    """Streams the coach reply token-by-token (an async generator of text deltas)."""
 
-    def coach_stream(self, *, system: str, messages: list[ChatMessage]): ...
+    def coach_stream(self, *, system: str, messages: list[ChatMessage]) -> AsyncIterator[str]: ...

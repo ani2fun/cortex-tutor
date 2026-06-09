@@ -8,6 +8,8 @@ neither.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from anthropic import AsyncAnthropic
 
 from tutor.models.base import ChatMessage
@@ -55,3 +57,22 @@ class AnthropicGateProvider:
         raise RuntimeError(
             f"gate model emitted no '{tool_name}' tool_use block (stop_reason={resp.stop_reason})"
         )
+
+
+class AnthropicCoachProvider:
+    """Streams the coach reply (Sonnet) via the Messages streaming API."""
+
+    def __init__(self, api_key: str, model: str, *, max_tokens: int = 1024, timeout: float = 120.0) -> None:
+        self._client = AsyncAnthropic(api_key=api_key, timeout=timeout)
+        self._model = model
+        self._max_tokens = max_tokens
+
+    async def coach_stream(self, *, system: str, messages: list[ChatMessage]) -> AsyncIterator[str]:
+        async with self._client.messages.stream(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            system=system,
+            messages=messages,  # type: ignore[arg-type]
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text

@@ -9,6 +9,7 @@ makes a future BYOK provider a drop-in.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -48,3 +49,35 @@ class OllamaGateProvider:
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
         return json.loads(content)
+
+
+class OllamaCoachProvider:
+    """Streams the coach reply via Ollama's OpenAI-compatible chat-completions SSE."""
+
+    def __init__(self, base_url: str, model: str, *, timeout: float = 180.0) -> None:
+        self._base = base_url.rstrip("/").removesuffix("/v1")
+        self._model = model
+        self._timeout = timeout
+
+    async def coach_stream(self, *, system: str, messages: list[ChatMessage]) -> AsyncIterator[str]:
+        payload = {
+            "model": self._model,
+            "messages": [{"role": "system", "content": system}, *messages],
+            "stream": True,
+            "temperature": 0.4,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with client.stream("POST", f"{self._base}/v1/chat/completions", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data)["choices"][0]["delta"].get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    if delta:
+                        yield delta
