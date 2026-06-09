@@ -26,7 +26,10 @@ gen-models:     # regenerate Pydantic models from the OpenAPI contract (single s
 		--use-standard-collections --use-schema-description
 
 migrate:        # apply Liquibase migrations (via Docker — no local Java needed)
-	docker compose run --rm liquibase update
+	# NB: no `update` arg — passing it overrides the compose service `command`
+	# (which carries --defaults-file/--search-path/--url + `update`), dropping the
+	# config; the bare `run` uses the service command as-is.
+	docker compose run --rm liquibase
 
 up:             # bring up the local polyglot dev stack
 	docker compose up -d
