@@ -17,6 +17,14 @@ Each turn: **gate first** (Haiku, forced strict tool-use, non-streamed) → **co
 streamed). Grounding comes from a separate read-only **MCP server** (Streamable HTTP) over the Cortex
 corpus. See the full design in the cortex repo's design doc / `docs/adr/`.
 
+## Why a separate Python/FastAPI service
+
+LLM orchestration is **I/O-bound, low-RPS, and streaming** — a fit for FastAPI + `asyncio` — and the
+Anthropic + MCP + eval ecosystem (and the CCA material) is Python-first. Keeping it a standalone,
+**stateless** service (Postgres is the source of truth) decouples it from the Scala `cortex` app and
+lets it scale horizontally and independently. Full rationale, alternatives, and the
+scalability/trade-off analysis: **[ADR 0001](docs/adr/0001-fastapi-python-tutor-service.md)**.
+
 ## Model tiers
 
 | Tier | Who | Backend | Cost |
