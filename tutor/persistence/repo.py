@@ -31,6 +31,21 @@ async def get_active(db: AsyncSession, user_sub: str, problem_id: str) -> models
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_active_locked(db: AsyncSession, user_sub: str, problem_id: str) -> models.Session | None:
+    """Like ``get_active`` but takes a row lock (``SELECT … FOR UPDATE``) for the duration of a turn —
+    the first guard against a two-tab double-submit (the optimistic ``save_state`` is the second)."""
+    stmt = (
+        select(models.Session)
+        .where(
+            models.Session.user_sub == user_sub,
+            models.Session.problem_id == problem_id,
+            models.Session.status == "active",
+        )
+        .with_for_update()
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def get_for_user(db: AsyncSession, session_id: UUID, user_sub: str) -> models.Session | None:
     """Fetch a session by id, scoped to its owner (so one user can't read another's)."""
     stmt = select(models.Session).where(

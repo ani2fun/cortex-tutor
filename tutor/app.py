@@ -20,6 +20,7 @@ from sqlalchemy import text
 from tutor.auth import CurrentPrincipal
 from tutor.config import get_settings
 from tutor.persistence.db import make_engine, make_sessionmaker
+from tutor.routes import sessions as sessions_routes
 
 log = structlog.get_logger()
 
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
         # P0 auth-parity smoke; superseded by the session routes in later phases.
         return {"sub": principal.sub, "preferredUsername": principal.preferred_username}
 
+    app.include_router(sessions_routes.router)
     return app
 
 
