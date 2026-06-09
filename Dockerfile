@@ -16,10 +16,12 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # App sources. The rubric skill ships IN the image — the loader reads it at runtime.
+# README.md is required by the build backend (pyproject `readme = "README.md"`); LICENSE for hygiene.
 COPY tutor ./tutor
 COPY grounding_mcp ./grounding_mcp
 COPY .claude ./.claude
 COPY api ./api
+COPY README.md LICENSE ./
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
