@@ -23,3 +23,18 @@ build/
 .vscode/
 
 # Note: uv.lock IS committed (reproducible builds) — do not ignore it.
+
+# ── AI-assistant scratch / agent docs — local only, kept out of the repo ──
+/CLAUDE.md
+/AGENTS.md
+/.cursor/
+/.cursorrules
+/.aider*
+/.windsurfrules
+# Architecture/design notes (ADRs etc.) stay local for this project.
+/docs/
+# Everything under .claude/ is local agent config EXCEPT the socratic-tutor skill: the service
+# loads it at runtime (tutor/skills/loader.py), the Dockerfile COPYs it, and tests hash it via
+# rubric_version() — it is product content, NOT scratch, so it stays tracked.
+/.claude/*
+!/.claude/skills/
