@@ -41,6 +41,8 @@ packages = ["tutor", "grounding_mcp"]
 line-length = 100
 target-version = "py312"
 src = ["tutor", "grounding_mcp", "tests", "evals"]
+# Generated from api/tutor-openapi.yaml via `make gen-models` — don't lint/format generated code.
+extend-exclude = ["tutor/contract_models.py"]
 
 [tool.ruff.lint]
 # pycodestyle, pyflakes, isort, pyupgrade, bugbear, async, ruff-specific

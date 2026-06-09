@@ -1,0 +1,422 @@
+openapi: 3.0.3
+info:
+  title: Cortex Tutor API
+  version: 0.1.0
+  description: |
+    The Cortex "Your Turn" Socratic tutor. **Single source of truth** for the tutor's HTTP contract:
+    `datamodel-code-generator` emits Pydantic models here; the Scala `cortex` client vendors this file
+    and `sbt-openapi-codegen`s its own client. CI on both repos fails on drift.
+
+    The six-step loop (`clarify → examples → approach → plan → implement → test`) is a server-side
+    FSM with per-gate evaluation — the model evaluates, the server advances. Turns stream over SSE.
+    All wire property names are camelCase (consistent with the cortex API).
+
+servers:
+  - url: https://tutor.kakde.eu
+    description: Production (homelab K3s)
+  - url: http://localhost:8000
+    description: Local dev
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Liveness — always 200 if the process is up.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Readiness — DB + JWKS + MCP reachable (Anthropic is a metric, never a readiness gate).
+      security: []
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/sessions:
+    post:
+      operationId: createSession
+      summary: |
+        Start (or resume) the coaching session for the caller + problem. Idempotent: an active
+        session for `(user, problemId)` is returned rather than duplicated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SessionCreateRequest" }
+      responses:
+        "200":
+          description: The active session (created or resumed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoachSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      summary: Resume — full session state + transcript. **No model call.**
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoachSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{sessionId}/reset:
+    post:
+      operationId: resetSession
+      summary: Abandon the active session and start fresh at step `clarify`.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: A fresh session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoachSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{sessionId}/turns:
+    post:
+      operationId: submitTurn
+      summary: |
+        Submit the learner's answer for the current step. The server runs the gate (then advances the
+        FSM if `pass`), persists, and **streams the coach reply over SSE**. The stream emits, in
+        order: a `state` event (the post-transition state, before the first token), zero or more
+        `token` events, then a `done` event carrying the `TurnResult`. Errors emit an `error` event.
+        Idempotent on `turnId` — re-POSTing the same `turnId` replays the committed result.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TurnRequest" }
+      responses:
+        "200":
+          description: |
+            An SSE stream (`text/event-stream`). Event `data:` payloads are one of `TurnStateEvent`,
+            `TurnTokenEvent`, `TurnDoneEvent`, `TurnErrorEvent` (see schemas). Modeled as a union for
+            codegen; the transport is hand-rolled on both sides (the native client can't set the
+            Authorization header on `EventSource`).
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/TurnEvent" }
+            application/json:
+              schema: { $ref: "#/components/schemas/TurnResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Stale write (another tab advanced first); body carries the current session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoachSession" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+
+  /v1/sessions/{sessionId}/prompt-bundle:
+    get:
+      operationId: getPromptBundle
+      summary: |
+        BYOK only — the assembled prompt for the current step (system + bounded transcript +
+        grounded context, **solution withheld** pre-implement). The browser calls its own provider
+        with this bundle + the user's key (which never reaches this server), then posts the result to
+        `byok-record`.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: step
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/Step" }
+      responses:
+        "200":
+          description: The prompt bundle to execute client-direct.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PromptBundle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/sessions/{sessionId}/turns/byok-record:
+    post:
+      operationId: recordByokTurn
+      summary: |
+        BYOK only — record a turn the browser executed client-direct. Carries the learner's answer,
+        the coach reply the provider returned, and the gate verdict computed client-side. The server
+        applies the verdict to the FSM, persists, and returns the `TurnResult`. No model call here,
+        and **no API key is accepted or stored**.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ByokRecordRequest" }
+      responses:
+        "200":
+          description: The recorded turn result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TurnResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak access token (same realm/JWKS the cortex Scala server validates).
+
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed, or expired bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: Authenticated but not on the homelab allowlist (and not using BYOK).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    NotFound:
+      description: No such session for this caller.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    PayloadTooLarge:
+      description: The learner answer / code exceeds the size bound.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    ServiceUnavailable:
+      description: A required dependency (DB / JWKS / MCP) is unavailable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+
+  schemas:
+    Step:
+      type: string
+      description: One of the six coaching steps, in order.
+      enum: [clarify, examples, approach, plan, implement, test]
+    Verdict:
+      type: string
+      description: The gate model's classification of the learner's answer.
+      enum: [pass, retry, off_topic, question]
+    Role:
+      type: string
+      enum: [user, coach]
+    SessionOrigin:
+      type: string
+      enum: [your_turn, problem_page]
+    SessionStatus:
+      type: string
+      enum: [active, completed]
+
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, example: ok }
+
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        detail: { type: string, nullable: true }
+        hint: { type: string, nullable: true }
+
+    CoachMessage:
+      type: object
+      required: [role, step, content, createdAtEpochMs]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+        step: { $ref: "#/components/schemas/Step" }
+        content: { type: string }
+        createdAtEpochMs: { type: integer, format: int64 }
+
+    StepScore:
+      type: object
+      required: [step, score]
+      properties:
+        step: { $ref: "#/components/schemas/Step" }
+        score: { type: integer, format: int32 }
+
+    GateVerdict:
+      type: object
+      description: |
+        The structured gate result. On the server path it is produced by the gate model (strict
+        tool-use); on the BYOK path the browser computes it and posts it here. The server re-derives
+        advancement as `verdict == pass` — never trusting a model-supplied advance flag.
+      required: [verdict]
+      properties:
+        verdict: { $ref: "#/components/schemas/Verdict" }
+        score:
+          type: integer
+          format: int32
+          description: Confidence the gate is cleared; one of {0,10,…,100}.
+          default: 0
+        rubricHits: { type: array, items: { type: string } }
+        missing: { type: array, items: { type: string } }
+        hint: { type: string, default: "" }
+        nextHintLevel: { type: integer, format: int32, default: 0 }
+
+    CoachSession:
+      type: object
+      required:
+        [sessionId, problemId, origin, status, currentStep, stepIndex, completed, messages, scores, rubricVersion]
+      properties:
+        sessionId: { type: string, format: uuid }
+        problemId: { type: string }
+        origin: { $ref: "#/components/schemas/SessionOrigin" }
+        status: { $ref: "#/components/schemas/SessionStatus" }
+        currentStep: { $ref: "#/components/schemas/Step" }
+        stepIndex: { type: integer, format: int32 }
+        completed: { type: boolean }
+        messages: { type: array, items: { $ref: "#/components/schemas/CoachMessage" } }
+        scores: { type: array, items: { $ref: "#/components/schemas/StepScore" } }
+        rubricVersion: { type: string }
+
+    SessionCreateRequest:
+      type: object
+      required: [problemId]
+      properties:
+        problemId: { type: string, example: "data-structures-and-algorithms/arrays/two-sum" }
+        origin:
+          allOf: [{ $ref: "#/components/schemas/SessionOrigin" }]
+          default: your_turn
+
+    TurnRequest:
+      type: object
+      required: [step, text]
+      properties:
+        step: { $ref: "#/components/schemas/Step" }
+        turnId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Client-generated idempotency key; re-POST replays the committed result.
+        text: { type: string, description: The learner's answer / message for this step. }
+        code: { type: string, nullable: true }
+        language: { type: string, nullable: true }
+        runResult:
+          type: string
+          nullable: true
+          description: stdout / status from /api/run (cortex go-judge), used by implement/test.
+
+    ByokRecordRequest:
+      type: object
+      required: [step, text, coachReply, verdict]
+      properties:
+        step: { $ref: "#/components/schemas/Step" }
+        turnId: { type: string, format: uuid, nullable: true }
+        text: { type: string }
+        coachReply: { type: string, description: The reply the browser got from the user's provider. }
+        verdict: { $ref: "#/components/schemas/GateVerdict" }
+        code: { type: string, nullable: true }
+        language: { type: string, nullable: true }
+        runResult: { type: string, nullable: true }
+
+    PromptBundle:
+      type: object
+      required: [step, system, messages, model]
+      properties:
+        step: { $ref: "#/components/schemas/Step" }
+        system: { type: string, description: The assembled system prompt (solution withheld pre-implement). }
+        messages: { type: array, items: { $ref: "#/components/schemas/CoachMessage" } }
+        model: { type: string, description: The model id the browser should request from the provider. }
+
+    TurnUsage:
+      type: object
+      properties:
+        inputTokens: { type: integer, format: int64 }
+        outputTokens: { type: integer, format: int64 }
+        cacheReadTokens: { type: integer, format: int64 }
+        cacheWriteTokens: { type: integer, format: int64 }
+        costUsd: { type: number, format: double }
+
+    TurnResult:
+      type: object
+      description: The committed outcome of a turn (also the `done` SSE event payload).
+      required: [sessionId, step, stepIndex, verdict, advanced, completed, reply]
+      properties:
+        sessionId: { type: string, format: uuid }
+        step:
+          allOf: [{ $ref: "#/components/schemas/Step" }]
+          description: The step that was evaluated.
+        stepIndex: { type: integer, format: int32, description: Current step index AFTER the turn. }
+        verdict: { $ref: "#/components/schemas/Verdict" }
+        score: { type: integer, format: int32, nullable: true }
+        advanced: { type: boolean }
+        completed: { type: boolean }
+        hint: { type: string, nullable: true }
+        reply: { $ref: "#/components/schemas/CoachMessage" }
+        usage:
+          allOf: [{ $ref: "#/components/schemas/TurnUsage" }]
+          nullable: true
+
+    # ── SSE event payloads (union; transport hand-rolled) ──────────────────────
+    TurnStateEvent:
+      type: object
+      required: [type, session]
+      properties:
+        type: { type: string, enum: [state] }
+        session: { $ref: "#/components/schemas/CoachSession" }
+    TurnTokenEvent:
+      type: object
+      required: [type, text]
+      properties:
+        type: { type: string, enum: [token] }
+        text: { type: string }
+    TurnDoneEvent:
+      type: object
+      required: [type, result]
+      properties:
+        type: { type: string, enum: [done] }
+        result: { $ref: "#/components/schemas/TurnResult" }
+    TurnErrorEvent:
+      type: object
+      required: [type, error]
+      properties:
+        type: { type: string, enum: [error] }
+        error: { $ref: "#/components/schemas/ApiError" }
+    TurnEvent:
+      oneOf:
+        - { $ref: "#/components/schemas/TurnStateEvent" }
+        - { $ref: "#/components/schemas/TurnTokenEvent" }
+        - { $ref: "#/components/schemas/TurnDoneEvent" }
+        - { $ref: "#/components/schemas/TurnErrorEvent" }
+      discriminator:
+        propertyName: type
+
+security:
+  - bearerAuth: []
