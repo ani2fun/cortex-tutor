@@ -1,0 +1,48 @@
+# Local polyglot dev stack for cortex-tutor.
+#
+# In production the `tutor` schema lives in the SHARED cortex Postgres; here we stand up a dedicated
+# one for a self-contained loop. AUTH_ENABLED=false skips Keycloak — to exercise real auth, point
+# KEYCLOAK_ISSUER_URL at a running cortex Keycloak and set AUTH_ENABLED=true.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cortex
+      POSTGRES_PASSWORD: cortex
+      POSTGRES_DB: cortex
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cortex -d cortex"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  liquibase:
+    image: liquibase/liquibase:4.30
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./migrations:/liquibase/changelog:ro
+    command:
+      - --defaults-file=/liquibase/changelog/liquibase.properties
+      - --search-path=/liquibase/changelog
+      - --url=jdbc:postgresql://postgres:5432/cortex
+      - --username=cortex
+      - --password=cortex
+      - update
+
+  tutor:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      liquibase: { condition: service_completed_successfully }
+    environment:
+      AUTH_ENABLED: "false"
+      DATABASE_URL: postgresql+asyncpg://cortex:cortex@postgres:5432/cortex
+      CORS_ALLOW_ORIGINS: "http://localhost:5173,http://localhost:8080"
+      COACH_HOMELAB_USERS: ani2fun
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+    ports: ["127.0.0.1:8000:8000"]
+
+  # cortex-grounding-mcp: the read-only Streamable-HTTP grounding server — added in the MCP phase (P4).
