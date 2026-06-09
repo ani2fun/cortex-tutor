@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # ── Anthropic / models ──
     anthropic_api_key: str | None = None
     coach_model: str = "claude-sonnet-4-6"
-    gate_model: str = "claude-haiku-4-5"
+    gate_model: str = "claude-haiku-4-5-20251001"  # verified live; dateless "claude-haiku-4-5" 404s
 
     # ── Homelab allowlist (CSV). Everyone else uses BYOK. Fails CLOSED. ──
     coach_homelab_users: str = "ani2fun"
