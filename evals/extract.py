@@ -70,6 +70,7 @@ async def extract_session(session_prefix: str, out: Path) -> None:
         if msg.role != "user":
             continue
         step = Step(msg.step)
+        evidence = msg.content_json or {}
         cases.append(
             Case(
                 case_id=f"{stem}-{sid8}-s{msg.seq}",
@@ -78,6 +79,9 @@ async def extract_session(session_prefix: str, out: Path) -> None:
                 step=step,
                 transcript=[{"role": _role(m.role), "content": m.content} for m in messages[:i]],
                 answer=msg.content,
+                code=evidence.get("code"),
+                language=evidence.get("language"),
+                run_result=evidence.get("runResult"),
                 problem_context=_frozen_context(grounding, session.problem_id, step),
                 source={"session_id": str(session.id), "answer_seq": msg.seq},
             )
@@ -110,6 +114,9 @@ def make_probes(labelled: Path, out: Path) -> None:
                     step=step,
                     transcript=donor.transcript,
                     answer=answer_case.answer,
+                    code=answer_case.code,
+                    language=answer_case.language,
+                    run_result=answer_case.run_result,
                     problem_context=donor.problem_context,
                     expected=Expected(
                         allowed_verdicts=[Verdict.RETRY, Verdict.OFF_TOPIC, Verdict.QUESTION],

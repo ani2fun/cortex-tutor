@@ -170,6 +170,15 @@ async def submit_turn(
         raise HTTPException(status_code=422, detail=f"invalid step: {step_raw}") from None
     turn_raw = body.get("turnId")
     turn_uuid = UUID(turn_raw) if turn_raw else None
+    # Workbench evidence (implement/test) — the editor's code + the latest run output. Size-guarded
+    # here (413 per the contract); compose_answer applies its own prompt-side caps downstream.
+    code, language, run_result = body.get("code"), body.get("language"), body.get("runResult")
+    caps = (("code", code, 64_000), ("language", language, 100), ("runResult", run_result, 16_000))
+    for name, value, cap in caps:
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(status_code=422, detail=f"{name} must be a string")
+        if value is not None and len(value) > cap:
+            raise HTTPException(status_code=413, detail=f"{name} exceeds {cap} characters")
 
     # ── Gate + FSM + persist, synchronously: a stale/mismatched write must surface as HTTP 409
     #    (the contract's 409 carries the current session), which is only possible before the SSE
@@ -196,6 +205,9 @@ async def submit_turn(
                 answer=answer,
                 problem_context=problem_ctx,
                 turn_id=turn_uuid,
+                code=code,
+                language=language,
+                run_result=run_result,
             )
         except StepMismatch as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

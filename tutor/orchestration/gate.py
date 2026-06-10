@@ -30,6 +30,15 @@ _VERDICTS = {v.value for v in Verdict}
 #: Which path the validate → repair → fail-safe pipeline took for one invocation.
 GateOutcome = Literal["valid", "coerced", "failsafe_schema", "failsafe_provider"]
 
+#: Steps whose gate judges code — the workbench snapshot is folded into the answer at these steps,
+#: and its *absence* is made explicit so a code-less "I implemented it" claim can't pass on prose.
+CODE_STEPS = frozenset({Step.IMPLEMENT, Step.TEST})
+
+#: Defensive prompt caps (the client already trims its run summary to ~4k; these guard the
+#: CPU-bound Ollama path against pathological payloads).
+_CODE_CAP = 20_000
+_RUN_RESULT_CAP = 4_000
+
 
 @dataclass(frozen=True)
 class GateEvaluation:
@@ -60,6 +69,37 @@ def build_gate_system(step: Step, problem_context: str) -> str:
         f"---\n\n## Current step: {step.value}\n\n{loader.step_guide(step)}\n\n"
         f"---\n\n## Problem context\n\n{problem_context}"
     )
+
+
+def compose_answer(
+    answer: str,
+    *,
+    step: Step,
+    code: str | None = None,
+    language: str | None = None,
+    run_result: str | None = None,
+) -> str:
+    """The gate/coach-visible form of the learner's message. At implement/test the workbench
+    snapshot is appended as labelled evidence blocks — or an explicit no-code marker, so the step
+    guides can rule that a bare claim never passes. Other steps pass through untouched. Used by
+    ``apply_turn`` AND the eval runner — one composition path for production and evals."""
+    if step not in CODE_STEPS:
+        return answer
+    parts = [answer]
+    if code and code.strip():
+        lang = (language or "").strip().lower()
+        parts.append(f"[workbench snapshot — {lang or 'code'}]\n```{lang}\n{_cap(code, _CODE_CAP)}\n```")
+        if run_result and run_result.strip():
+            parts.append(f"[run result]\n{_cap(run_result, _RUN_RESULT_CAP)}")
+        else:
+            parts.append("[run result: none]")
+    else:
+        parts.append("[workbench: no code attached to this message]")
+    return "\n\n".join(parts)
+
+
+def _cap(value: str, limit: int) -> str:
+    return value if len(value) <= limit else value[:limit] + "\n… (truncated)"
 
 
 async def evaluate(

@@ -61,6 +61,9 @@ async def apply_turn(
     answer: str,
     problem_context: str,
     turn_id: UUID | None = None,
+    code: str | None = None,
+    language: str | None = None,
+    run_result: str | None = None,
 ) -> TurnOutcome:
     session = await repo.get_active_locked(db, user_sub, problem_id)
     if session is None:
@@ -95,12 +98,25 @@ async def apply_turn(
         raise StepMismatch(f"submitted step '{step.value}' != current '{state.step.value}'")
 
     prior = _transcript(await repo.load_recent_messages(db, session.id))
+    # The workbench evidence rides along in content_json (wire-shaped keys, matching TurnRequest);
+    # `content` stays the learner's own words — transcripts and the UI render from it.
+    evidence = {k: v for k, v in (("code", code), ("language", language), ("runResult", run_result)) if v}
     answer_msg = await repo.append_message(
-        db, session_id=session.id, role="user", step=state.step.value, content=answer, turn_id=turn_id
+        db,
+        session_id=session.id,
+        role="user",
+        step=state.step.value,
+        content=answer,
+        turn_id=turn_id,
+        content_json=evidence or None,
     )
 
+    # What the gate AND the coach see: the answer with the evidence (or its absence) folded in.
+    gate_answer = gate.compose_answer(
+        answer, step=state.step, code=code, language=language, run_result=run_result
+    )
     evaluation = await gate.evaluate(
-        provider, step=state.step, problem_context=problem_context, transcript=prior, answer=answer
+        provider, step=state.step, problem_context=problem_context, transcript=prior, answer=gate_answer
     )
     verdict = evaluation.verdict
     result = transition(state, verdict)
@@ -170,7 +186,7 @@ async def apply_turn(
         verdict=verdict,
         advanced=result.advanced,
         completed=result.completed,
-        coach_messages=[*prior, {"role": "user", "content": answer}],
+        coach_messages=[*prior, {"role": "user", "content": gate_answer}],
     )
 
 

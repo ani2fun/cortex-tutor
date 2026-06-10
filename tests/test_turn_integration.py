@@ -25,13 +25,16 @@ DB_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://cortex:cortex@loca
 
 
 class FakeGate:
-    """A GateProvider stub returning a fixed verdict dict — no network."""
+    """A GateProvider stub returning a fixed verdict dict — no network. Captures the messages it
+    was shown so tests can assert on the gate-visible answer."""
 
     def __init__(self, verdict: str, score: int = 80) -> None:
         self._verdict = verdict
         self._score = score
+        self.seen_messages: list[list[dict]] = []
 
     async def gate(self, *, system, messages, tool_schema, tool_name) -> dict:
+        self.seen_messages.append(list(messages))
         return {"verdict": self._verdict, "score": self._score}
 
 
@@ -120,6 +123,64 @@ async def test_retry_stays_and_counts_attempt(sessionmaker: async_sessionmaker):
     assert out.advanced is False
     assert out.session.current_step == Step.CLARIFY.value
     assert out.session.attempts == 1
+
+
+async def test_workbench_evidence_threads_into_gate_and_persists(sessionmaker: async_sessionmaker):
+    """The s16 fix: code/language/runResult reach the gate (composed answer) + content_json."""
+    user, problem = f"itest-{uuid4()}", "itest/two-sum-evidence"
+    # Walk the FSM to `implement` — apply_turn only accepts the session's current step.
+    for step in (Step.CLARIFY, Step.EXAMPLES, Step.APPROACH, Step.PLAN):
+        async with sessionmaker() as db:
+            await turn_orch.apply_turn(
+                db,
+                provider=FakeGate("pass", 80),
+                user_sub=user,
+                problem_id=problem,
+                origin="your_turn",
+                step=step,
+                answer=f"answer for {step.value}",
+                problem_context="ctx",
+            )
+
+    gate_provider = FakeGate("pass", 80)
+    async with sessionmaker() as db:
+        out = await turn_orch.apply_turn(
+            db,
+            provider=gate_provider,
+            user_sub=user,
+            problem_id=problem,
+            origin="your_turn",
+            step=Step.IMPLEMENT,
+            answer="Implemented sort + two pointers.",
+            problem_context="ctx",
+            code="def two_sum(arr, t): ...",
+            language="python",
+            run_result="[3, 4]",
+        )
+
+    # The gate judged the composed answer — snapshot + run result folded in.
+    gate_view = gate_provider.seen_messages[-1][-1]["content"]
+    assert "Implemented sort + two pointers." in gate_view
+    assert "[workbench snapshot — python]" in gate_view
+    assert "def two_sum(arr, t): ..." in gate_view
+    assert "[run result]\n[3, 4]" in gate_view
+    # The coach responds to the same composed view.
+    assert out.coach_messages[-1]["content"] == gate_view
+
+    async with sessionmaker() as db:
+        s = await repo.get_active(db, user, problem)
+        assert s is not None
+        msgs = await repo.load_recent_messages(db, s.id)
+        implement_msg = msgs[-1]
+        # `content` stays the learner's own words; the evidence rides in content_json.
+        assert implement_msg.content == "Implemented sort + two pointers."
+        assert implement_msg.content_json == {
+            "code": "def two_sum(arr, t): ...",
+            "language": "python",
+            "runResult": "[3, 4]",
+        }
+        # Earlier (non-code) steps persisted no evidence.
+        assert msgs[0].content_json is None
 
 
 async def test_wrong_step_raises_mismatch(sessionmaker: async_sessionmaker):

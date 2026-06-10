@@ -39,6 +39,11 @@ class Case(BaseModel):
     step: Step
     transcript: list[dict] = Field(default_factory=list)  # [{"role": …, "content": …}] as the gate saw it
     answer: str
+    # Workbench evidence (implement/test) — folded into the gate-visible answer by the runner via
+    # gate.compose_answer, exactly as production folds it in apply_turn.
+    code: str | None = None
+    language: str | None = None
+    run_result: str | None = None
     problem_context: str  # frozen at extraction — reproducible regardless of corpus drift
     expected: Expected | None = None  # None until labelled; the runner refuses unlabelled cases
     labeller: str | None = None

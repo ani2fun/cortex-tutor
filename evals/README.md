@@ -69,6 +69,12 @@ Decisions:
   counted step-hallucination.
 - **Labels**: machine-drafted, human-reviewed (the plan's κ-calibration starts when a second judge
   exists; for now the label file is the single source of truth and is versioned).
+- **Workbench evidence** (2026-06-10): cases carry optional `code` / `language` / `run_result`,
+  folded into the gate-visible answer by the runner via `gate.compose_answer` — the same function
+  `apply_turn` uses in production, so implement/test cases *without* code replay with the explicit
+  no-code marker exactly as a live claim-only turn would. `two_sum_evidence.jsonl` holds synthetic
+  evidence variants of s16/s18/s20 (with-code → pass; run-without-complexity → retry — the latter
+  is a stable gate disagreement, see its rationale).
 
 ## 3. Metrics (what "flaky" means, numerically)
 

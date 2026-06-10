@@ -76,7 +76,9 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String)
     step: Mapped[str] = mapped_column(String)
     content: Mapped[str] = mapped_column(Text)
-    content_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null: a Python None must store SQL NULL, not JSON null — raw-SQL audits
+    # (content_json IS NOT NULL) distinguish evidence-bearing turns by it.
+    content_json: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     input_tokens: Mapped[int] = mapped_column(BigInteger)
     output_tokens: Mapped[int] = mapped_column(BigInteger)
     cost_usd: Mapped[float] = mapped_column(Numeric(12, 6))

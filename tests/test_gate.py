@@ -176,6 +176,50 @@ async def test_provider_without_identity_attrs_gets_class_name_fallback():
     assert ev.model == "unknown"
 
 
+# ── compose_answer: workbench-evidence folding (implement/test) ──────────────
+
+
+def test_compose_answer_passes_through_at_non_code_steps():
+    out = gate.compose_answer("my plan", step=Step.PLAN, code="x = 1", language="python", run_result="ok")
+    assert out == "my plan"
+
+
+def test_compose_answer_appends_snapshot_and_run_result_at_implement():
+    out = gate.compose_answer(
+        "Implemented it.", step=Step.IMPLEMENT, code="def f(): ...", language="Python", run_result="[3, 4]"
+    )
+    assert out.startswith("Implemented it.")
+    assert "[workbench snapshot — python]" in out  # language normalised for the fence
+    assert "```python\ndef f(): ...\n```" in out
+    assert "[run result]\n[3, 4]" in out
+
+
+def test_compose_answer_marks_unrun_code():
+    out = gate.compose_answer("done", step=Step.TEST, code="def f(): ...", language="python")
+    assert "[workbench snapshot — python]" in out
+    assert "[run result: none]" in out
+
+
+def test_compose_answer_marks_missing_code():
+    # The s16 false-pass exhibit: a code-less claim must arrive visibly evidence-free.
+    out = gate.compose_answer("I implemented it and it works.", step=Step.IMPLEMENT)
+    assert "[workbench: no code attached to this message]" in out
+
+
+def test_compose_answer_treats_blank_code_as_missing():
+    out = gate.compose_answer("done", step=Step.IMPLEMENT, code="   \n", run_result="ok")
+    assert "[workbench: no code attached to this message]" in out
+    assert "[run result]" not in out  # a run result without code is not evidence
+
+
+def test_compose_answer_caps_oversized_evidence():
+    out = gate.compose_answer(
+        "d", step=Step.IMPLEMENT, code="x" * 30_000, language="python", run_result="y" * 10_000
+    )
+    assert out.count("… (truncated)") == 2
+    assert len(out) < 26_000
+
+
 # ── prompt assembly + tool schema ────────────────────────────────────────────
 
 

@@ -4,9 +4,16 @@
 
 **Gate criterion — `pass` requires:**
 - **Complete, plausible code** in the chosen language that faithfully implements the plan (sound
-  structure, sensible names). It need **not** be bug-free here — bugs surface in `test`. If a
-  `run_result` is supplied (the learner ran their code), use it to inform the judgement (does it
-  compile / run? — not necessarily correct yet).
+  structure, sensible names). It need **not** be bug-free here — bugs surface in `test`.
+
+**Evidence:** the learner's editor attaches their code to the message as a
+`[workbench snapshot — <language>]` block, plus a `[run result]` block when they ran it. Judge the
+snapshot (or code written directly in the message) as the implementation. A `[run result]`, when
+present, informs the judgement (does it compile / run? — not necessarily correct yet); a
+`[run result: none]` is fine at this step — running is not required to pass `implement`.
+- `[workbench: no code attached]` with no code in the message itself means the learner only
+  **claimed** an implementation. A claim never passes, however confident or detailed — `retry` and
+  ask them to share their code.
 
 **Pass threshold:** score ≥ 60.
 

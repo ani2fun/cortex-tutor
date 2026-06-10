@@ -87,7 +87,15 @@ async def run_replays(cases: list[Case], n: int, concurrency: int) -> list[Repla
                 step=case.step,
                 problem_context=case.problem_context,
                 transcript=list(case.transcript),
-                answer=case.answer,
+                # The same evidence folding production applies — implement/test cases without code
+                # replay with the explicit no-code marker, exactly as a live claim-only turn would.
+                answer=gate.compose_answer(
+                    case.answer,
+                    step=case.step,
+                    code=case.code,
+                    language=case.language,
+                    run_result=case.run_result,
+                ),
             )
         done += 1
         print(
