@@ -27,6 +27,9 @@ class AnthropicGateProvider:
         self._client = AsyncAnthropic(api_key=api_key, timeout=timeout)
         self._model = model
         self._max_tokens = max_tokens
+        # Public identity for the gate_call audit log + eval reports (read via getattr).
+        self.kind = "anthropic"
+        self.model_id = model
 
     async def gate(
         self,

@@ -95,13 +95,14 @@ async def apply_turn(
         raise StepMismatch(f"submitted step '{step.value}' != current '{state.step.value}'")
 
     prior = _transcript(await repo.load_recent_messages(db, session.id))
-    await repo.append_message(
+    answer_msg = await repo.append_message(
         db, session_id=session.id, role="user", step=state.step.value, content=answer, turn_id=turn_id
     )
 
-    verdict = await gate.evaluate(
+    evaluation = await gate.evaluate(
         provider, step=state.step, problem_context=problem_context, transcript=prior, answer=answer
     )
+    verdict = evaluation.verdict
     result = transition(state, verdict)
 
     await repo.upsert_gate(
@@ -111,6 +112,26 @@ async def apply_turn(
         verdict=verdict.verdict.value,
         score=verdict.score,
         attempts=result.state.attempts,
+        missing_json=verdict.missing,
+    )
+    # The append-only audit row behind the eval dataset (evals/README.md) — committed with the turn.
+    await repo.add_gate_call(
+        db,
+        session_id=session.id,
+        turn_id=turn_id,
+        step=state.step.value,
+        answer_seq=answer_msg.seq,
+        rubric_version=session.rubric_version,
+        provider=evaluation.provider_kind,
+        model=evaluation.model,
+        outcome=evaluation.outcome,
+        raw_json=evaluation.raw,
+        verdict=verdict.verdict.value,
+        score=verdict.score,
+        missing=verdict.missing,
+        hint=verdict.hint,
+        problem_context_hash=evaluation.problem_context_hash,
+        latency_ms=evaluation.latency_ms,
     )
     advanced_ok = await repo.save_state(
         db,

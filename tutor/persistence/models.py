@@ -95,10 +95,36 @@ class Gate(Base):
     verdict: Mapped[str] = mapped_column(String)
     score: Mapped[int] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer)
-    missing_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    missing_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     judge_kind: Mapped[str] = mapped_column(String)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+class GateCall(Base):
+    """Append-only audit log: one row per gate invocation (``gate`` keeps only the last verdict
+    per step). The eval dataset is extracted from here — see ``evals/README.md``."""
+
+    __tablename__ = "gate_call"
+    __table_args__: ClassVar = {"schema": SCHEMA}
+
+    session_id: Mapped[UUID] = mapped_column(_fk("session"), primary_key=True)
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    turn_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    step: Mapped[str] = mapped_column(String)
+    answer_seq: Mapped[int] = mapped_column(Integer)
+    rubric_version: Mapped[str] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(String)
+    raw_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verdict: Mapped[str] = mapped_column(String)
+    score: Mapped[int] = mapped_column(Integer)
+    missing_json: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    hint: Mapped[str] = mapped_column(Text)
+    problem_context_hash: Mapped[str] = mapped_column(Text)
+    latency_ms: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
 
 
 class GroundingRef(Base):

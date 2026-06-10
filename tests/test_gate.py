@@ -31,10 +31,14 @@ class FakeGateProvider:
         return self.result
 
 
-async def _evaluate(provider: FakeGateProvider, step: Step = Step.CLARIFY):
+async def _evaluate_full(provider: FakeGateProvider, step: Step = Step.CLARIFY) -> gate.GateEvaluation:
     return await gate.evaluate(
         provider, step=step, problem_context=PROBLEM, transcript=[], answer="my answer"
     )
+
+
+async def _evaluate(provider: FakeGateProvider, step: Step = Step.CLARIFY):
+    return (await _evaluate_full(provider, step)).verdict
 
 
 # ── happy path ───────────────────────────────────────────────────────────────
@@ -126,6 +130,50 @@ async def test_irreparable_output_fails_safe_to_retry():
         step=Step.TEST,
     )
     assert v.verdict is Verdict.RETRY
+
+
+# ── the GateEvaluation audit record (the recording seam behind evals/) ──────
+
+
+async def test_clean_verdict_audits_as_valid_with_raw_and_identity():
+    raw = {"verdict": "pass", "score": 80}
+    fake = FakeGateProvider(result=raw)
+    fake.kind = "fake"
+    fake.model_id = "fake-1"
+    ev = await _evaluate_full(fake)
+    assert ev.outcome == "valid"
+    assert ev.raw == raw  # the unvalidated output is preserved verbatim
+    assert (ev.provider_kind, ev.model) == ("fake", "fake-1")
+    assert ev.latency_ms >= 0
+    assert len(ev.problem_context_hash) == 12
+
+
+async def test_repaired_verdict_audits_as_coerced_with_original_raw():
+    raw = {"verdict": "pass", "score": 95, "missing": ""}  # the live 2026-06-09 near-miss shape
+    ev = await _evaluate_full(FakeGateProvider(result=raw), step=Step.PLAN)
+    assert ev.outcome == "coerced"
+    assert ev.raw == raw  # pre-coercion, so the failure SHAPE stays measurable
+    assert ev.verdict.score == 90
+
+
+async def test_irreparable_output_audits_as_failsafe_schema():
+    ev = await _evaluate_full(FakeGateProvider(result={"verdict": "pass", "rubric_hits": 123}))
+    assert ev.outcome == "failsafe_schema"
+    assert ev.raw == {"verdict": "pass", "rubric_hits": 123}
+    assert ev.verdict.verdict is Verdict.RETRY
+
+
+async def test_provider_error_audits_as_failsafe_provider_with_no_raw():
+    ev = await _evaluate_full(FakeGateProvider(error=TimeoutError("llm down")))
+    assert ev.outcome == "failsafe_provider"
+    assert ev.raw is None
+    assert ev.verdict.verdict is Verdict.RETRY
+
+
+async def test_provider_without_identity_attrs_gets_class_name_fallback():
+    ev = await _evaluate_full(FakeGateProvider(result={"verdict": "pass", "score": 80}))
+    assert ev.provider_kind == "FakeGateProvider"
+    assert ev.model == "unknown"
 
 
 # ── prompt assembly + tool schema ────────────────────────────────────────────

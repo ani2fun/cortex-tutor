@@ -8,6 +8,11 @@ uncertainty. The gate can only ever withhold progress, never grant it.
 
 from __future__ import annotations
 
+import hashlib
+import time
+from dataclasses import dataclass
+from typing import Literal
+
 import structlog
 from pydantic import ValidationError
 
@@ -21,6 +26,25 @@ log = structlog.get_logger()
 TOOL_NAME = "record_gate_verdict"
 
 _VERDICTS = {v.value for v in Verdict}
+
+#: Which path the validate → repair → fail-safe pipeline took for one invocation.
+GateOutcome = Literal["valid", "coerced", "failsafe_schema", "failsafe_provider"]
+
+
+@dataclass(frozen=True)
+class GateEvaluation:
+    """One gate invocation's full audit record — the validated verdict plus everything needed to
+    quantify schema fragility and flakiness after the fact (``evals/README.md``). Persisted to the
+    append-only ``tutor.gate_call`` table in production and consumed directly by the eval runner —
+    one code path for both."""
+
+    verdict: GateVerdict
+    outcome: GateOutcome
+    raw: dict | None  # the UNVALIDATED tool output; None when the provider itself errored
+    latency_ms: int
+    provider_kind: str
+    model: str
+    problem_context_hash: str
 
 
 def gate_tool_schema() -> dict:
@@ -45,10 +69,23 @@ async def evaluate(
     problem_context: str,
     transcript: list[ChatMessage],
     answer: str,
-) -> GateVerdict:
+) -> GateEvaluation:
     system = build_gate_system(step, problem_context)
     messages: list[ChatMessage] = [*transcript, {"role": "user", "content": answer}]
+    context_hash = hashlib.sha256(problem_context.encode("utf-8")).hexdigest()[:12]
 
+    def _result(verdict: GateVerdict, outcome: GateOutcome, raw: dict | None) -> GateEvaluation:
+        return GateEvaluation(
+            verdict=verdict,
+            outcome=outcome,
+            raw=raw,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            provider_kind=getattr(provider, "kind", type(provider).__name__),
+            model=getattr(provider, "model_id", "unknown"),
+            problem_context_hash=context_hash,
+        )
+
+    started = time.monotonic()
     try:
         raw = await provider.gate(
             system=system,
@@ -58,17 +95,19 @@ async def evaluate(
         )
     except Exception as exc:  # transport / timeout / refusal → withhold progress
         log.warning("gate.provider_error", step=step.value, error=str(exc))
-        return GateVerdict.retry_failsafe("Let's take another pass at that.")
+        return _result(
+            GateVerdict.retry_failsafe("Let's take another pass at that."), "failsafe_provider", None
+        )
 
     try:
-        return GateVerdict.model_validate(raw)
+        return _result(GateVerdict.model_validate(raw), "valid", raw)
     except ValidationError as first:
         log.info("gate.repair", step=step.value, error=str(first))
         try:
-            return GateVerdict.model_validate(_coerce(raw))
+            return _result(GateVerdict.model_validate(_coerce(raw)), "coerced", raw)
         except ValidationError as second:
             log.warning("gate.repair_failed", step=step.value, error=str(second))
-            return GateVerdict.retry_failsafe()
+            return _result(GateVerdict.retry_failsafe(), "failsafe_schema", raw)
 
 
 def _coerce(raw: dict) -> dict:

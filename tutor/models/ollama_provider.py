@@ -22,6 +22,9 @@ class OllamaGateProvider:
         self._base = base_url.rstrip("/").removesuffix("/v1")
         self._model = model
         self._timeout = timeout
+        # Public identity for the gate_call audit log + eval reports (read via getattr).
+        self.kind = "ollama"
+        self.model_id = model
 
     async def gate(
         self,

@@ -41,8 +41,9 @@ async def sessionmaker() -> AsyncIterator[async_sessionmaker]:
     try:
         async with engine.connect() as conn:
             # to_regclass returns NULL (no error) when the relation is missing, so one probe
-            # covers both "DB unreachable" (raises) and "schema not migrated" (NULL).
-            migrated = await conn.scalar(text("SELECT to_regclass('tutor.session')"))
+            # covers both "DB unreachable" (raises) and "schema not migrated" (NULL). Probe the
+            # NEWEST relation so a stale schema skips instead of failing mid-test.
+            migrated = await conn.scalar(text("SELECT to_regclass('tutor.gate_call')"))
     except Exception:
         await engine.dispose()
         pytest.skip("Postgres not reachable — run `make up` to exercise the turn integration test")
@@ -81,6 +82,16 @@ async def test_pass_advances_and_persists(sessionmaker: async_sessionmaker):
         # apply_turn persists only the learner's answer; the coach reply is recorded after streaming.
         msgs = await repo.load_recent_messages(db, s.id)
         assert [m.role for m in msgs] == ["user"]
+        # One append-only gate_call audit row per invocation (the eval-dataset feed).
+        call_sql = text(
+            "SELECT step, answer_seq, outcome, verdict, provider FROM tutor.gate_call WHERE session_id = :sid"
+        )
+        calls = (await db.execute(call_sql, {"sid": s.id})).mappings().all()
+        assert len(calls) == 1
+        call = calls[0]
+        assert (call["step"], call["answer_seq"], call["outcome"]) == ("clarify", 1, "valid")
+        assert call["verdict"] == "pass"
+        assert call["provider"] == "FakeGate"  # no identity attrs → class-name fallback
 
     # The coach reply is persisted separately (what the SSE route does once the stream completes).
     async with sessionmaker() as db:

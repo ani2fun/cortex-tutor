@@ -195,7 +195,7 @@ async def upsert_gate(
     verdict: str,
     score: int,
     attempts: int,
-    missing_json: dict | None = None,
+    missing_json: list[str] | None = None,
     judge_kind: str = "llm",
 ) -> None:
     now = _now()
@@ -221,6 +221,48 @@ async def upsert_gate(
         },
     )
     await db.execute(stmt)
+
+
+async def add_gate_call(
+    db: AsyncSession,
+    *,
+    session_id: UUID,
+    turn_id: UUID | None,
+    step: str,
+    answer_seq: int,
+    rubric_version: str,
+    provider: str,
+    model: str,
+    outcome: str,
+    raw_json: dict | None,
+    verdict: str,
+    score: int,
+    missing: list[str],
+    hint: str,
+    problem_context_hash: str,
+    latency_ms: int,
+) -> None:
+    """Append one gate-invocation audit row (``seq`` is a DB IDENTITY column, so it's omitted)."""
+    await db.execute(
+        pg_insert(models.GateCall).values(
+            session_id=session_id,
+            turn_id=turn_id,
+            step=step,
+            answer_seq=answer_seq,
+            rubric_version=rubric_version,
+            provider=provider,
+            model=model,
+            outcome=outcome,
+            raw_json=raw_json,
+            verdict=verdict,
+            score=score,
+            missing_json=missing,
+            hint=hint,
+            problem_context_hash=problem_context_hash,
+            latency_ms=latency_ms,
+            created_at=_now(),
+        )
+    )
 
 
 async def abandon_active(db: AsyncSession, user_sub: str, problem_id: str) -> int:
