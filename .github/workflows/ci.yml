@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ruff + pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync venv (frozen)
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      # DB-backed integration tests skip themselves in CI (no Postgres / no
+      # tutor schema) with an explicit reason — the pure FSM/gate/coach suite
+      # is the gate here.
+      - name: Test (pytest)
+        run: uv run pytest -q
+
+  docker:
+    name: docker build smoke
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build app image
+        run: docker build -t cortex-tutor:ci .
+      - name: Build migrate image
+        run: docker build -f Dockerfile.migrate -t cortex-tutor-migrate:ci .

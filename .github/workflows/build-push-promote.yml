@@ -1,0 +1,136 @@
+name: Build, Push, and Promote Cortex Tutor
+
+# Mirrors cortex's _build-push-promote.yml, inlined because this repo ships TWO
+# images per commit — the FastAPI app (which also contains the grounding MCP
+# server, started with a different command) and the Liquibase migrate image
+# (ADR 0002: tutor schema migrations run as an init step in K3s). Both are
+# tagged with the same commit SHA and promoted in ONE infra commit so a deploy
+# can never pair an app with a stale changelog.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: cortex-tutor-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  APP_IMAGE: ghcr.io/ani2fun/cortex-tutor
+  MIGRATE_IMAGE: ghcr.io/ani2fun/cortex-tutor-migrate
+  INFRA_REPO: ani2fun/infra
+  KUSTOMIZATION_FILE: deploy/apps/cortex-tutor/overlays/prod/kustomization.yaml
+
+jobs:
+  build-push-promote:
+    name: Build images and update infra repo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout application repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --tag ${APP_IMAGE}:${{ github.sha }} \
+            --tag ${APP_IMAGE}:latest \
+            --cache-from "type=gha,scope=cortex-tutor" \
+            --cache-to "type=gha,mode=max,scope=cortex-tutor" \
+            .
+
+      - name: Build and push migrate image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --file Dockerfile.migrate \
+            --push \
+            --tag ${MIGRATE_IMAGE}:${{ github.sha }} \
+            --tag ${MIGRATE_IMAGE}:latest \
+            --cache-from "type=gha,scope=cortex-tutor-migrate" \
+            --cache-to "type=gha,mode=max,scope=cortex-tutor-migrate" \
+            .
+
+      - name: Checkout infra repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ref: main
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: infra
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+
+      - name: Update production image tags in infra repo
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          KUSTOMIZATION_PATH: infra/${{ env.KUSTOMIZATION_FILE }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          path = Path(os.environ["KUSTOMIZATION_PATH"])
+          if not path.exists():
+              print(f"::warning::{path} not found — the app's manifests aren't on infra "
+                    "main yet. Skipping image-tag promotion; it auto-runs on the next build "
+                    "once the path exists (the images were still built + pushed to GHCR).")
+              raise SystemExit(0)
+          data = yaml.safe_load(path.read_text())
+          tag = os.environ["IMAGE_TAG"]
+          images = data.setdefault("images", [])
+
+          for repo in (os.environ["APP_IMAGE"], os.environ["MIGRATE_IMAGE"]):
+              accepted = {repo, repo.removeprefix("ghcr.io/")}
+              for image in images:
+                  if image.get("name") in accepted:
+                      image["name"] = repo
+                      image["newName"] = repo
+                      image["newTag"] = tag
+                      break
+              else:
+                  images.append({"name": repo, "newName": repo, "newTag": tag})
+
+          path.write_text(yaml.safe_dump(data, sort_keys=False))
+          PY
+
+      - name: Configure Git identity
+        run: |
+          git -C infra config user.name "${{ secrets.INFRA_GIT_USER_NAME }}"
+          git -C infra config user.email "${{ secrets.INFRA_GIT_USER_EMAIL }}"
+
+      - name: Commit and push infra change
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          git -C infra pull --rebase --autostash origin main
+
+          git -C infra add "${{ env.KUSTOMIZATION_FILE }}" 2>/dev/null || true
+
+          if git -C infra diff --cached --quiet; then
+            echo "No infra changes to commit."
+            exit 0
+          fi
+
+          git -C infra commit -m "chore(cortex-tutor): promote image to ${IMAGE_TAG}"
+          git -C infra push origin HEAD:main

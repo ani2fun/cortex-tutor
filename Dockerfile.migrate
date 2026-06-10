@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1
+# Tutor schema migrations as a runnable image (ADR 0002): K3s runs this as an init step against the
+# SHARED cortex Postgres before the tutor starts. Same changelog as local dev (docker-compose's
+# `liquibase` service); URL/credentials are supplied by the runner. The tracking tables are uniquely
+# named (tutor_databasechangelog/-lock, see migrations/liquibase.properties) so re-running is safe
+# and never collides with the cortex Scala app's own Liquibase bookkeeping.
+FROM liquibase/liquibase:4.30
+COPY migrations /liquibase/changelog
