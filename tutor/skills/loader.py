@@ -1,9 +1,11 @@
 """Loads the version-controlled Socratic coaching rubric (``.claude/skills/socratic-tutor/``).
 
-This is *externalized prompt content* (NOT the Anthropic Agent Skills API). The loader composes the
-stable system block (cache breakpoint #1) and exposes the per-step gate criterion + the verdict
-contract. The eval runner reads the SAME files the service loads, so a rubric edit is exactly what
-CI gates, and ``rubric_version()`` stamps each session for auditability + eval-baseline pinning.
+This is *externalized prompt content* (NOT the Anthropic Agent Skills API). The loader keeps the
+**coach** prompt (persona, prose) and the **gate** prompt (lean grader) separate, so the coach is
+never handed the verdict schema it must not emit — only the gate is, and it does so via forced
+tool-use, not this markdown. The eval runner reads the SAME files the service loads, so a rubric edit
+is exactly what CI gates, and ``rubric_version()`` stamps each session for auditability + eval-baseline
+pinning.
 """
 
 from __future__ import annotations
@@ -35,10 +37,12 @@ def rubric_version() -> str:
 
 
 @lru_cache(maxsize=1)
-def system_prompt() -> str:
-    """The stable system block: ``rubric/system.md`` + the verdict contract. Cacheable prefix that
-    does not change within (or across) sessions, so it sits at cache breakpoint #1."""
-    return _read("rubric/system.md") + "\n\n---\n\n" + _read("verdict-contract.md")
+def coach_prompt() -> str:
+    """The coach's stable system block: ``rubric/system.md`` (persona + the six-step process) — and
+    deliberately **not** the verdict contract. The coach speaks prose; only the GATE emits the
+    structured verdict (via forced tool-use). Handing the coach the verdict schema makes it copy that
+    JSON instead of coaching (cortex P5 #28). Cacheable prefix → cache breakpoint #1."""
+    return _read("rubric/system.md")
 
 
 @lru_cache(maxsize=1)

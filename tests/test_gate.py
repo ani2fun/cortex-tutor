@@ -67,6 +67,37 @@ async def test_out_of_set_score_snaps_to_nearest_bucket():
     assert v.score == 80  # 83 → nearest allowed bucket
 
 
+async def test_tie_score_snaps_down():
+    # 95 is equidistant from 90 and 100; ties snap DOWN — the gate never grants more than the
+    # model intended.
+    v = await _evaluate(FakeGateProvider(result={"verdict": "pass", "score": 95}))
+    assert v.verdict is Verdict.PASS
+    assert v.score == 90
+
+
+async def test_empty_string_missing_coerces_to_empty_list():
+    # Live repro (2026-06-09, Haiku gate, step=plan): score=95 + missing="" fell through repair to
+    # the fail-safe RETRY/0 — a plan the gate scored 95 was graded as a failure.
+    v = await _evaluate(
+        FakeGateProvider(result={"verdict": "pass", "score": 95, "missing": ""}), step=Step.PLAN
+    )
+    assert v.verdict is Verdict.PASS
+    assert v.score == 90
+    assert v.missing == []
+
+
+async def test_null_rubric_hits_coerces_to_empty_list():
+    v = await _evaluate(FakeGateProvider(result={"verdict": "pass", "score": 80, "rubric_hits": None}))
+    assert v.verdict is Verdict.PASS
+    assert v.rubric_hits == []
+
+
+async def test_bare_string_list_field_coerces_to_singleton():
+    v = await _evaluate(FakeGateProvider(result={"verdict": "retry", "missing": "no contrasting approach"}))
+    assert v.verdict is Verdict.RETRY
+    assert v.missing == ["no contrasting approach"]
+
+
 async def test_unknown_verdict_coerced_to_retry():
     v = await _evaluate(FakeGateProvider(result={"verdict": "maybe", "score": 50}), step=Step.PLAN)
     assert v.verdict is Verdict.RETRY
@@ -88,9 +119,10 @@ async def test_provider_error_fails_safe_to_retry():
 
 
 async def test_irreparable_output_fails_safe_to_retry():
-    # rubric_hits is a string (should be a list); _coerce can't fix it → fail-safe RETRY.
+    # rubric_hits is a number — not one of the benign near-miss shapes _coerce repairs → fail-safe
+    # RETRY. (A bare *string* is repairable: it coerces to a singleton list.)
     v = await _evaluate(
-        FakeGateProvider(result={"verdict": "pass", "rubric_hits": "oops-not-a-list"}),
+        FakeGateProvider(result={"verdict": "pass", "rubric_hits": 123}),
         step=Step.TEST,
     )
     assert v.verdict is Verdict.RETRY

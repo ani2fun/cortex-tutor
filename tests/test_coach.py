@@ -7,8 +7,13 @@ relays the provider's deltas while passing the directive-augmented system + tran
 
 from __future__ import annotations
 
+import json
+import os
+import re
 from collections.abc import AsyncIterator
 
+import pytest
+from pydantic import ValidationError
 from tutor.domain.steps import Step
 from tutor.domain.verdict import GateVerdict, Verdict
 from tutor.orchestration import coach as coach_orch
@@ -90,3 +95,104 @@ async def test_stream_coach_relays_deltas_and_appends_directive():
     assert fake.messages == transcript  # the transcript is passed through verbatim
     assert "## Your task this turn" in (fake.system or "")
     assert "next" in (fake.system or "").lower()  # the advance directive is appended
+
+
+# --- Regression guard: the coach speaks PROSE, never the gate's verdict JSON ----------------------
+# cortex P5 #28: the coach streamed a fenced GateVerdict block because its system prompt still bundled
+# `verdict-contract.md`. The GATE emits the verdict via forced tool-use; the COACH must never emit it.
+
+_FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def looks_like_gate_verdict_json(text: str) -> bool:
+    """True iff ``text`` is — or contains a fenced — JSON object that validates as a ``GateVerdict``,
+    i.e. the coach leaked the gate's structured output instead of coaching in prose."""
+    candidates = list(_FENCED_JSON.findall(text))
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    for block in candidates:
+        try:
+            GateVerdict.model_validate_json(block)
+            return True
+        except (ValidationError, ValueError):
+            continue
+    return False
+
+
+# The exact shape observed in the P5 #28 repro — the detector MUST flag it, or the guard is toothless.
+_LEAKED_VERDICT = "```json\n" + json.dumps(
+    {
+        "verdict": "retry",
+        "score": 40,
+        "rubric_hits": ["optimal hash map idea"],
+        "missing": ["a contrasting approach"],
+        "hint": "Now offer a slower approach.",
+        "next_hint_level": 2,
+    }
+) + "\n```"
+
+
+def test_verdict_json_detector_has_teeth():
+    assert looks_like_gate_verdict_json(_LEAKED_VERDICT) is True  # flags the real leak (fenced)
+    assert looks_like_gate_verdict_json('{"verdict":"pass","score":100,"next_hint_level":0}') is True
+    # ...and does not false-positive on genuine coaching prose.
+    assert looks_like_gate_verdict_json("Nice — you've got the hash map. What's a slower approach?") is False
+
+
+def test_coach_system_prompt_does_not_instruct_verdict_json():
+    """Root cause: the coach's assembled system prompt must not carry the verdict contract, or the
+    coach model copies that JSON template instead of speaking. Locks cortex P5 #28."""
+    system = coach_orch.build_coach_system(Step.APPROACH, "PROBLEM-CONTEXT")
+    assert "rubric_hits" not in system
+    assert "next_hint_level" not in system
+    assert "you cannot return prose here" not in system.lower()
+
+    # The full per-turn system (with the retry directive folded in) likewise carries no verdict
+    # template — the directive says "hint level 2" (a value), never the `next_hint_level` field.
+    full = (
+        coach_orch.build_coach_system(Step.APPROACH, "ctx")
+        + "\n\n---\n\n## Your task this turn\n"
+        + coach_orch._directive(
+            GateVerdict(verdict=Verdict.RETRY, missing=["a contrasting approach"], next_hint_level=2),
+            advanced=False,
+            completed=False,
+        )
+    )
+    assert "rubric_hits" not in full
+    assert "next_hint_level" not in full
+
+
+@pytest.mark.skipif(
+    not (os.environ.get("RUN_LIVE_COACH") and os.environ.get("ANTHROPIC_API_KEY")),
+    reason="live coach check needs RUN_LIVE_COACH=1 + ANTHROPIC_API_KEY (the P5 #28 FORCE_LOCAL=false path)",
+)
+async def test_live_coach_reply_is_prose_not_verdict_json():
+    """End-to-end against the real Sonnet coach: the streamed reply must be prose, never a GateVerdict.
+    A clean no-op in bare CI; the guard that actually exercised the reported failure mode."""
+    from tutor.config import get_settings
+    from tutor.models.anthropic_provider import AnthropicCoachProvider
+
+    settings = get_settings()
+    provider = AnthropicCoachProvider(settings.anthropic_api_key, settings.coach_model, max_tokens=256)
+    reply = "".join(
+        [
+            delta
+            async for delta in coach_orch.stream_coach(
+                provider,
+                step=Step.APPROACH,
+                problem_context="Problem: Two Sum — return the indices of the two numbers adding to target.",
+                transcript=[{"role": "user", "content": "Hash map of complements, O(n) time / O(n) space."}],
+                verdict=GateVerdict(
+                    verdict=Verdict.RETRY,
+                    score=40,
+                    missing=["a second, contrasting approach"],
+                    next_hint_level=1,
+                ),
+                advanced=False,
+                completed=False,
+            )
+        ]
+    )
+    assert reply.strip(), "coach produced no text"
+    assert not looks_like_gate_verdict_json(reply), f"coach leaked verdict JSON:\n{reply}"

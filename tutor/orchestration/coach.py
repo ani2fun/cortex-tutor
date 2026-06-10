@@ -16,9 +16,9 @@ from tutor.skills import loader
 
 
 def build_coach_system(step: Step, problem_context: str) -> str:
-    """Full coach rubric + the current step's guide + the grounded problem."""
+    """Coach persona (no verdict contract) + the current step's guide + the grounded problem."""
     return (
-        f"{loader.system_prompt()}\n\n"
+        f"{loader.coach_prompt()}\n\n"
         f"---\n\n## Current step: {step.value}\n\n{loader.step_guide(step)}\n\n"
         f"---\n\n## Problem context\n\n{problem_context}"
     )

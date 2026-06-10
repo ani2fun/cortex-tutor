@@ -73,8 +73,10 @@ async def evaluate(
 
 def _coerce(raw: dict) -> dict:
     """One-shot best-effort repair of a near-miss verdict: snap an out-of-set score to the nearest
-    allowed bucket, clamp the hint level, and default an unknown verdict to ``RETRY``. Anything this
-    can't fix falls through to the fail-safe."""
+    allowed bucket (ties snap **down** — the gate never grants more than the model intended),
+    normalise benign list-field shapes (null/empty string → ``[]``, bare string → singleton list),
+    clamp the hint level, and default an unknown verdict to ``RETRY``. Anything this can't fix
+    falls through to the fail-safe."""
     out = dict(raw)
 
     if out.get("verdict") not in _VERDICTS:
@@ -84,7 +86,7 @@ def _coerce(raw: dict) -> dict:
     if isinstance(score, bool):  # bool is an int subclass — treat as invalid
         out["score"] = 0
     elif isinstance(score, (int, float)):
-        out["score"] = min(SCORE_VALUES, key=lambda b: abs(b - score))
+        out["score"] = min(SCORE_VALUES, key=lambda b: (abs(b - score), b))
     elif score is not None:
         out["score"] = 0
 
@@ -92,4 +94,19 @@ def _coerce(raw: dict) -> dict:
     if isinstance(level, (int, float)) and not isinstance(level, bool):
         out["next_hint_level"] = max(0, min(3, int(level)))
 
+    for field in ("rubric_hits", "missing"):
+        if field in out:
+            out[field] = _coerce_str_list(out[field])
+
     return out
+
+
+def _coerce_str_list(value: object) -> object:
+    """Normalise the known-benign near-miss shapes for ``list[str]`` fields: ``null`` and
+    empty/whitespace-only strings mean "nothing to report" → ``[]``; a bare non-empty string is a
+    singleton → ``[value]``. Anything else is returned untouched for validation to judge."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return value
