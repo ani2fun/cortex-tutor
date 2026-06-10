@@ -1,7 +1,8 @@
 """Integration test for the turn orchestration against the live compose Postgres.
 
-Skipped when the DB at ``DATABASE_URL`` isn't reachable, so it runs locally with ``make up`` and is a
-clean no-op in a bare CI. Uses a fake gate provider — no model calls.
+Skipped when the DB at ``DATABASE_URL`` isn't reachable or the ``tutor`` schema isn't migrated, so it
+runs locally with ``make up`` + ``make migrate`` and is a clean no-op in a bare CI. Uses a fake gate
+provider — no model calls.
 """
 
 from __future__ import annotations
@@ -39,10 +40,15 @@ async def sessionmaker() -> AsyncIterator[async_sessionmaker]:
     engine = make_engine(DB_URL)
     try:
         async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+            # to_regclass returns NULL (no error) when the relation is missing, so one probe
+            # covers both "DB unreachable" (raises) and "schema not migrated" (NULL).
+            migrated = await conn.scalar(text("SELECT to_regclass('tutor.session')"))
     except Exception:
         await engine.dispose()
         pytest.skip("Postgres not reachable — run `make up` to exercise the turn integration test")
+    if migrated is None:
+        await engine.dispose()
+        pytest.skip("tutor schema not migrated — run `make migrate` to exercise the turn integration test")
     yield make_sessionmaker(engine)
     await engine.dispose()
 
