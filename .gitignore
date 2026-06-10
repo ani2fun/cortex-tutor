@@ -38,3 +38,6 @@ build/
 # rubric_version() — it is product content, NOT scratch, so it stays tracked.
 /.claude/*
 !/.claude/skills/
+
+# eval run artifacts (reports/metrics per run); baselines/ stays tracked
+evals/out/

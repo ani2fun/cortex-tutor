@@ -110,3 +110,29 @@ Out of scope for this slice (deliberate): coach-quality LLM-judge suite, κ cali
 second judge), funnel/Prometheus metrics (separate P6 sub-slice), and the `submit_turn`
 code/runResult threading (exhibit 3 — the harness's first *downstream customer*: add evidence-bearing
 cases, then change the prompt, then prove it).
+
+## 5. First measured results (2026-06-10, Haiku gate, 26 cases x 5 replays)
+
+Three runs on the pilot datasets; baseline frozen at `evals/baselines/haiku-two-sum-pilot.json`.
+
+| Metric | SDK defaults (conc 4) | + max_retries=4, conc 1 | + temperature=0 |
+|---|---|---|---|
+| fail-safe (provider) | **20.8%** (all org-TPM 429s) | 0% | 0% |
+| valid first-try | 56.2% | 73.8% | 73.8% |
+| pass↔non-pass flip rate | 15.4% | 15.4% | **0.0%** |
+| score spread (mean/max) | 23/100 | 20/100 | **2/40** |
+| accuracy / false-pass | 79.2% / 7.7% | 76.2% / 11.5% | 76.9% / 11.5% |
+
+What the numbers separated:
+- **429s were the biggest single failure source** at SDK defaults — every one a learner-visible
+  fail-safe RETRY. Fixed via `max_retries=4` (the SDK honors `retry-after`).
+- **`temperature=0` eliminated sampling flakiness outright** (flip rate 15.4%→0, spread 20→2) with
+  no accuracy cost. The gate now gives the same answer the same fate every time.
+- **Schema noise is systematic, not sampling noise**: valid-rate is identical at default temp and
+  temp 0 (~26% of calls emit an out-of-enum score and/or string `missing`; `_coerce` absorbs all of
+  them — fail-safe-schema 0%). A prompt-side experiment (state the allowed score values in
+  `rubric/gate.md`) is now cheap to verify here.
+- **Remaining decision errors are consistent 5/5** — real targets, not noise: `s16` false-passes on
+  a code-less "I implemented it" claim (the `submit_turn` code-threading gap); `s12` classifies an
+  identical resubmitted answer as `question`; probes `s10/s14-at-approach` step-hallucinate a pass;
+  `s1`/`s14` are stable sub-threshold retries flagged for the human label review.

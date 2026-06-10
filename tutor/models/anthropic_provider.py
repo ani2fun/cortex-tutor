@@ -46,6 +46,7 @@ class AnthropicGateProvider:
         resp = await self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
+            temperature=0,  # a grader should sample as deterministically as possible (eval-verified)
             system=system,
             messages=messages,  # type: ignore[arg-type]
             tools=[
