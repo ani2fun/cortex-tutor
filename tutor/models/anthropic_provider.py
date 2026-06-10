@@ -24,7 +24,11 @@ class AnthropicGateProvider:
         max_tokens: int = 512,
         timeout: float = 60.0,
     ) -> None:
-        self._client = AsyncAnthropic(api_key=api_key, timeout=timeout)
+        # max_retries=4 (SDK default 2): the gate shares the org's per-model TPM budget, and a
+        # burst of turns (or an eval run) hits 429s the SDK can ride out via retry-after. Measured
+        # 2026-06-10: at SDK defaults a 130-call eval run lost 20.8% of calls to 429-driven
+        # fail-safe RETRYs (evals/out/haiku-default-temp).
+        self._client = AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=4)
         self._model = model
         self._max_tokens = max_tokens
         # Public identity for the gate_call audit log + eval reports (read via getattr).
