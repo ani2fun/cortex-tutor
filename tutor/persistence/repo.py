@@ -55,6 +55,17 @@ async def get_for_user(db: AsyncSession, session_id: UUID, user_sub: str) -> mod
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_for_user_locked(db: AsyncSession, session_id: UUID, user_sub: str) -> models.Session | None:
+    """Like ``get_for_user`` but with a row lock — for writers addressing a session by id
+    (``reset``, ``byok-record``), where the one-active index must not race a concurrent create."""
+    stmt = (
+        select(models.Session)
+        .where(models.Session.id == session_id, models.Session.user_sub == user_sub)
+        .with_for_update()
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def create(
     db: AsyncSession,
     *,

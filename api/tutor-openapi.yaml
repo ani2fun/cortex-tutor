@@ -123,7 +123,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TurnResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
+        "403":
+          description: |
+            `byok_required` — this session is BYOK-tier (the homelab-key path is allowlist-only);
+            turn via `getPromptBundle` + `recordByokTurn` instead.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: Stale write (another tab advanced first); body carries the current session.
@@ -153,7 +159,15 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PromptBundle" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            The requested step is not the session's current step (the bundle is clamped to the
+            current step — the context-withholding control), or the session is completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
 
   /v1/sessions/{sessionId}/turns/byok-record:
     post:
@@ -177,8 +191,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TurnResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            Step mismatch / completed session (`ApiError` detail), or a stale write — the body then
+            carries the current `CoachSession`, mirroring `submitTurn`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "422":
+          description: Missing/oversized fields or an unrepairable `verdict` payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
 
 components:
   securitySchemes:
@@ -305,6 +332,12 @@ components:
         messages: { type: array, items: { $ref: "#/components/schemas/CoachMessage" } }
         scores: { type: array, items: { $ref: "#/components/schemas/StepScore" } }
         rubricVersion: { type: string }
+        byok:
+          type: boolean
+          description: |
+            Tier, pinned at creation (server-authoritative): false = homelab (server-side gate +
+            coach via `submitTurn`), true = BYOK (client-direct via `getPromptBundle` +
+            `recordByokTurn`; `submitTurn` answers 403). `reset` re-derives the tier.
 
     SessionCreateRequest:
       type: object

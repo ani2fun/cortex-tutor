@@ -183,6 +183,71 @@ async def test_workbench_evidence_threads_into_gate_and_persists(sessionmaker: a
         assert msgs[0].content_json is None
 
 
+async def test_byok_turn_applies_client_verdict_and_persists_atomically(sessionmaker: async_sessionmaker):
+    """apply_byok_turn: no gate call — the client verdict drives the server-owned FSM transition;
+    user msg + coach reply + byok-marked gate rows land in ONE transaction."""
+    from tutor.domain.verdict import GateVerdict
+
+    user, problem = f"itest-{uuid4()}", "itest/two-sum-byok"
+    async with sessionmaker() as db:
+        s = await repo.create(
+            db, user_sub=user, problem_id=problem, origin="your_turn", rubric_version="t", byok=True
+        )
+        await db.commit()
+        sid = s.id
+
+    verdict = GateVerdict.model_validate({"verdict": "pass", "score": 80})
+    turn_id = uuid4()
+    async with sessionmaker() as db:
+        locked = await repo.get_for_user_locked(db, sid, user)
+        assert locked is not None
+        out = await turn_orch.apply_byok_turn(
+            db,
+            session=locked,
+            step=Step.CLARIFY,
+            answer="Restated: given nums + target, return the two indices.",
+            coach_reply="Good restatement — now, what would a tiny example look like?",
+            verdict=verdict,
+            verdict_outcome="valid",
+            raw_verdict={"verdict": "pass", "score": 80},
+            turn_id=turn_id,
+            code=None,
+            language=None,
+            run_result=None,
+        )
+    assert out.advanced is True
+    assert out.session.current_step == Step.EXAMPLES.value
+
+    async with sessionmaker() as db:
+        msgs = await repo.load_recent_messages(db, sid)
+        assert [m.role for m in msgs] == ["user", "coach"]  # both persisted in the one commit
+        assert msgs[1].content.startswith("Good restatement")
+        gate_sql = text("SELECT judge_kind FROM tutor.gate WHERE session_id = :sid")
+        assert (await db.execute(gate_sql, {"sid": sid})).scalar_one() == "byok"
+        call_sql = text("SELECT provider, outcome FROM tutor.gate_call WHERE session_id = :sid")
+        call = (await db.execute(call_sql, {"sid": sid})).mappings().one()
+        assert (call["provider"], call["outcome"]) == ("byok_client", "valid")
+
+    # Replay: the same turn_id changes nothing and reports replayed.
+    async with sessionmaker() as db:
+        locked = await repo.get_for_user_locked(db, sid, user)
+        replay = await turn_orch.apply_byok_turn(
+            db,
+            session=locked,
+            step=Step.EXAMPLES,
+            answer="(re-post)",
+            coach_reply="(ignored)",
+            verdict=verdict,
+            verdict_outcome="valid",
+            raw_verdict=None,
+            turn_id=turn_id,
+        )
+    assert replay.replayed is True
+    async with sessionmaker() as db:
+        msgs = await repo.load_recent_messages(db, sid)
+        assert len(msgs) == 2  # nothing appended
+
+
 async def test_wrong_step_raises_mismatch(sessionmaker: async_sessionmaker):
     user, problem = f"itest-{uuid4()}", "itest/two-sum-mismatch"
     async with sessionmaker() as db:

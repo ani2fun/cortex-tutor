@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     # ── Homelab allowlist (CSV). Everyone else uses BYOK. Fails CLOSED. ──
     coach_homelab_users: str = "ani2fun"
+    # Dev escape: with auth off everyone is the synthetic homelab principal — set FORCE_BYOK=true
+    # to mint BYOK-tier sessions locally and exercise the client-direct path end-to-end.
+    force_byok: bool = False
 
     # ── wk-1 Ollama fallback ──
     ollama_url: str | None = None

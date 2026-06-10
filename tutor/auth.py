@@ -84,10 +84,17 @@ async def verify_jwt(
 
 def is_homelab(principal: Principal, settings: Settings) -> bool:
     """True iff the caller may use the homelab Claude/Ollama path (else: BYOK). Fails closed."""
-    return (
-        principal.preferred_username in settings.homelab_users
-        or principal.sub in settings.homelab_users
-    )
+    return principal.preferred_username in settings.homelab_users or principal.sub in settings.homelab_users
+
+
+def wants_byok(principal: Principal, settings: Settings) -> bool:
+    """True iff a session created for this caller is BYOK-tier (client-direct key, server records
+    only). FORCE_BYOK overrides for local dev; otherwise an authenticated caller off the homelab
+    allowlist is BYOK. With auth off (and no force) the synthetic dev principal rides the homelab
+    path so ``bin/dev`` keeps working."""
+    if settings.force_byok:
+        return True
+    return settings.auth_enabled and not is_homelab(principal, settings)
 
 
 # Convenience alias for route signatures.

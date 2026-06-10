@@ -190,6 +190,130 @@ async def apply_turn(
     )
 
 
+async def apply_byok_turn(
+    db: AsyncSession,
+    *,
+    session: models.Session,  # the addressed row, fetched FOR UPDATE by the route
+    step: Step,
+    answer: str,
+    coach_reply: str,
+    verdict: GateVerdict,
+    verdict_outcome: str,  # "valid" | "coerced" — how validate_client_verdict classified it
+    raw_verdict: dict | None,
+    turn_id: UUID | None = None,
+    code: str | None = None,
+    language: str | None = None,
+    run_result: str | None = None,
+) -> TurnOutcome:
+    """The BYOK twin of ``apply_turn``: the verdict arrived from the browser (computed client-direct
+    with the user's key), so there is NO gate call — the server still owns the FSM transition,
+    persistence, and audit. The coach reply is persisted in the same transaction (nothing streams),
+    and the gate rows are marked ``byok`` so analytics can segment the trust boundary."""
+    # Idempotency — this exact answer-turn already committed? Replay (no re-advance).
+    if turn_id is not None and await repo.find_by_turn(db, session.id, turn_id) is not None:
+        return TurnOutcome(
+            session=session,
+            evaluated_step=Step(session.current_step),
+            verdict=GateVerdict.retry_failsafe("(already recorded)"),
+            advanced=False,
+            completed=session.status == SessionStatus.COMPLETED.value,
+            replayed=True,
+        )
+
+    state = SessionState(
+        step=Step(session.current_step),
+        attempts=session.attempts,
+        hint_level=session.hint_level,
+        status=SessionStatus(session.status),
+    )
+    if state.status is SessionStatus.COMPLETED:
+        raise StepMismatch("session is already completed")
+    if step is not state.step:
+        raise StepMismatch(f"submitted step '{step.value}' != current '{state.step.value}'")
+
+    evidence = {k: v for k, v in (("code", code), ("language", language), ("runResult", run_result)) if v}
+    answer_msg = await repo.append_message(
+        db,
+        session_id=session.id,
+        role="user",
+        step=state.step.value,
+        content=answer,
+        turn_id=turn_id,
+        content_json=evidence or None,
+    )
+
+    result = transition(state, verdict)
+
+    await repo.upsert_gate(
+        db,
+        session_id=session.id,
+        step=state.step.value,
+        verdict=verdict.verdict.value,
+        score=verdict.score,
+        attempts=result.state.attempts,
+        missing_json=verdict.missing,
+        judge_kind="byok",
+    )
+    await repo.add_gate_call(
+        db,
+        session_id=session.id,
+        turn_id=turn_id,
+        step=state.step.value,
+        answer_seq=answer_msg.seq,
+        rubric_version=session.rubric_version,
+        provider="byok_client",
+        model="client",
+        outcome=verdict_outcome,
+        raw_json=raw_verdict,
+        verdict=verdict.verdict.value,
+        score=verdict.score,
+        missing=verdict.missing,
+        hint=verdict.hint,
+        problem_context_hash="byok",
+        latency_ms=0,
+    )
+    await repo.append_message(
+        db, session_id=session.id, role="coach", step=state.step.value, content=coach_reply
+    )
+    advanced_ok = await repo.save_state(
+        db,
+        session_id=session.id,
+        expected_version=session.version,
+        status=result.state.status.value,
+        current_step=result.state.step.value,
+        step_index=step_index(result.state.step),
+        attempts=result.state.attempts,
+        hint_level=result.state.hint_level,
+        last_turn_id=turn_id,
+    )
+    if not advanced_ok:
+        raise StaleTurn("session advanced concurrently")
+    await db.commit()
+
+    session.status = result.state.status.value
+    session.current_step = result.state.step.value
+    session.step_index = step_index(result.state.step)
+    session.attempts = result.state.attempts
+    session.hint_level = result.state.hint_level
+    session.version = session.version + 1
+
+    log.info(
+        "turn.byok_recorded",
+        session_id=str(session.id),
+        step=state.step.value,
+        verdict=verdict.verdict.value,
+        advanced=result.advanced,
+        completed=result.completed,
+    )
+    return TurnOutcome(
+        session=session,
+        evaluated_step=state.step,
+        verdict=verdict,
+        advanced=result.advanced,
+        completed=result.completed,
+    )
+
+
 async def record_coach_reply(db: AsyncSession, *, session_id: UUID, step: Step, content: str) -> None:
     """Persist the streamed coach reply after the stream completes."""
     await repo.append_message(db, session_id=session_id, role="coach", step=step.value, content=content)
