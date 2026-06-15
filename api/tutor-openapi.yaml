@@ -44,6 +44,21 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /v1/whoami:
+    get:
+      operationId: whoami
+      summary: |
+        The caller's identity, coach tier, and the models they may pick (`availableModels` /
+        `defaultModel`). The SPA renders the model picker from this; `createSession` re-validates
+        the choice server-side.
+      responses:
+        "200":
+          description: Identity, tier, and the caller's selectable coach models.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Whoami" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/sessions:
     post:
       operationId: createSession
@@ -282,6 +297,33 @@ components:
         detail: { type: string, nullable: true }
         hint: { type: string, nullable: true }
 
+    Tier:
+      type: string
+      description: The caller's coach tier — `homelab` (server key) or `byok` (client-direct).
+      enum: [homelab, byok]
+
+    ModelOption:
+      type: object
+      required: [key, display, provider]
+      properties:
+        key: { type: string, description: "Stable catalog key to send as SessionCreateRequest.model." }
+        display: { type: string, description: Human-readable label for the model picker. }
+        provider: { type: string, description: "Backend family (e.g. anthropic)." }
+
+    Whoami:
+      type: object
+      required: [sub, preferredUsername, tier, defaultModel, availableModels]
+      properties:
+        sub: { type: string }
+        preferredUsername: { type: string }
+        tier: { $ref: "#/components/schemas/Tier" }
+        defaultModel:
+          type: string
+          description: Catalog key used when SessionCreateRequest.model is omitted.
+        availableModels:
+          type: array
+          items: { $ref: "#/components/schemas/ModelOption" }
+
     CoachMessage:
       type: object
       required: [role, step, content, createdAtEpochMs]
@@ -338,6 +380,12 @@ components:
             Tier, pinned at creation (server-authoritative): false = homelab (server-side gate +
             coach via `submitTurn`), true = BYOK (client-direct via `getPromptBundle` +
             `recordByokTurn`; `submitTurn` answers 403). `reset` re-derives the tier.
+        model:
+          type: string
+          nullable: true
+          description: |
+            The session's chosen coach model, by stable catalog key (null on pre-selection sessions
+            → the tier default applies). Echoes `SessionCreateRequest.model`.
 
     SessionCreateRequest:
       type: object
@@ -353,6 +401,14 @@ components:
         origin:
           allOf: [{ $ref: "#/components/schemas/SessionOrigin" }]
           default: your_turn
+        model:
+          type: string
+          nullable: true
+          description: |
+            Optional coach model, by stable catalog **key** (e.g. `claude-sonnet`, `claude-haiku`;
+            see `GET /v1/whoami` → `availableModels`). Omit for the tier default. Validated
+            server-side against the caller's tier allow-list (422 if unknown/disallowed) and pinned
+            at creation — a `model` on a resume is ignored; `reset` to change it.
 
     TurnRequest:
       type: object

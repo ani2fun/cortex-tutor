@@ -44,6 +44,18 @@ class Settings(BaseSettings):
 
     # ── Guards ──
     coach_max_context_chars: int = 200_000
+    # Largest single persisted message (learner answer or coach reply); also caps the request `text`
+    # field. Enforced for BYOK/external users only — homelab users are unrestricted.
+    coach_max_message_chars: int = 16_000
+    # Hard ceiling on a request body (by Content-Length) — 413 before buffering. Comfortably covers
+    # the largest legit turn (code 64k + coachReply 64k + runResult 16k + text 16k + JSON overhead).
+    coach_max_request_bytes: int = 512_000
+
+    # ── Per-user storage quotas (BYOK/external tier only; homelab users unlimited) ──
+    # A realistic homelab budget so one external account cannot fill Postgres: a bounded number of
+    # saved problems, each a bounded conversation. Clearing chats (account menu) frees the budget.
+    coach_max_sessions_per_user: int = 25
+    coach_max_messages_per_session: int = 120  # ~60 turns (a user + coach row per turn)
 
     @property
     def homelab_users(self) -> set[str]:

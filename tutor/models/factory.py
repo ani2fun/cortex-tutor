@@ -15,7 +15,10 @@ from tutor.models.ollama_provider import OllamaCoachProvider, OllamaGateProvider
 _DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"  # 7b grades more reliably than a 3b; 3b is faster on CPU
 
 
-def _prefer_ollama(settings: Settings) -> bool:
+def prefers_local(settings: Settings) -> bool:
+    """True when gate/coach should use the wk-1 Ollama backend instead of Claude — local-dev mode:
+    ``FORCE_LOCAL``, or no Anthropic key with an Ollama URL set. The session routes reuse this so
+    the per-session Claude coach is skipped (and the Ollama fallback kept) in local dev."""
     return settings.force_local or (not settings.anthropic_api_key and bool(settings.ollama_url))
 
 
@@ -24,7 +27,7 @@ def _ollama_model(settings: Settings) -> str:
 
 
 def make_gate_provider(settings: Settings) -> GateProvider:
-    if _prefer_ollama(settings) and settings.ollama_url:
+    if prefers_local(settings) and settings.ollama_url:
         return OllamaGateProvider(
             settings.ollama_url, _ollama_model(settings), timeout=settings.ollama_timeout
         )
@@ -38,7 +41,7 @@ def make_gate_provider(settings: Settings) -> GateProvider:
 
 
 def make_coach_provider(settings: Settings) -> CoachProvider:
-    if _prefer_ollama(settings) and settings.ollama_url:
+    if prefers_local(settings) and settings.ollama_url:
         return OllamaCoachProvider(
             settings.ollama_url, _ollama_model(settings), timeout=settings.ollama_timeout
         )

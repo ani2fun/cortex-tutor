@@ -86,6 +86,10 @@ class Message(Base):
     summarized_into: Mapped[int | None] = mapped_column(Integer, nullable=True)
     redacted: Mapped[bool] = mapped_column(Boolean)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    # The coach model (stable catalog key) that produced THIS message — None for user/system rows and
+    # pre-migration rows. Records which model answered each turn so a mixed-model transcript (the
+    # operator switching local↔cloud mid-session) stays auditable.
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Gate(Base):

@@ -7,10 +7,11 @@ The FSM application half (``apply_byok_turn``) is integration-tested against liv
 from __future__ import annotations
 
 import pytest
-from tutor.auth import Principal, wants_byok
+from tutor.auth import Principal, tier_for, wants_byok
 from tutor.config import Settings
 from tutor.domain.steps import Step
 from tutor.domain.verdict import Verdict
+from tutor.models.catalog import Tier
 from tutor.orchestration import byok
 
 PROBLEM = "Two Sum: return the indices of the two numbers in `nums` that add to `target`."
@@ -109,3 +110,21 @@ def test_force_byok_overrides_everything():
     assert wants_byok(Principal(sub="dev", preferred_username="dev"), s) is True
     s2 = _settings(auth_enabled=True, force_byok=True, coach_homelab_users="ani2fun")
     assert wants_byok(Principal(sub="x", preferred_username="ani2fun"), s2) is True
+
+
+# ── tier_for: the coach tier (homelab vs byok), mirroring wants_byok ──────────────────────────
+
+
+def test_tier_for_allowlisted_user_is_homelab():
+    s = _settings(auth_enabled=True, coach_homelab_users="ani2fun")
+    assert tier_for(Principal(sub="x", preferred_username="ani2fun"), s) is Tier.HOMELAB
+
+
+def test_tier_for_unlisted_user_is_byok():
+    s = _settings(auth_enabled=True, coach_homelab_users="ani2fun")
+    assert tier_for(Principal(sub="y", preferred_username="someone"), s) is Tier.BYOK
+
+
+def test_tier_for_force_byok_is_byok():
+    s = _settings(auth_enabled=True, force_byok=True, coach_homelab_users="ani2fun")
+    assert tier_for(Principal(sub="x", preferred_username="ani2fun"), s) is Tier.BYOK

@@ -23,7 +23,7 @@ gen-models:     # regenerate Pydantic models from the OpenAPI contract (single s
 	uv run datamodel-codegen \
 		--input api/tutor-openapi.yaml --input-file-type openapi \
 		--output tutor/contract_models.py --output-model-type pydantic_v2.BaseModel \
-		--use-standard-collections --use-schema-description
+		--use-standard-collections --use-schema-description --target-python-version 3.12
 
 migrate:        # apply Liquibase migrations (via Docker — no local Java needed)
 	# NB: no `update` arg — passing it overrides the compose service `command`

@@ -17,6 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from tutor.domain.steps import Step
 from tutor.domain.verdict import Verdict
+from tutor.models import catalog
+from tutor.models.catalog import Tier
 from tutor.orchestration import turn as turn_orch
 from tutor.persistence import repo
 from tutor.persistence.db import make_engine, make_sessionmaker
@@ -246,6 +248,64 @@ async def test_byok_turn_applies_client_verdict_and_persists_atomically(sessionm
     async with sessionmaker() as db:
         msgs = await repo.load_recent_messages(db, sid)
         assert len(msgs) == 2  # nothing appended
+
+
+async def test_create_persists_coach_model(sessionmaker: async_sessionmaker):
+    """The chosen coach model (stable catalog key) is stored on the session and round-trips."""
+    user, problem = f"itest-{uuid4()}", "itest/model-store"
+    async with sessionmaker() as db:
+        s = await repo.create(
+            db,
+            user_sub=user,
+            problem_id=problem,
+            origin="your_turn",
+            rubric_version="t",
+            coach_model="claude-haiku",
+        )
+        await db.commit()
+    async with sessionmaker() as db:
+        got = await repo.get_for_user(db, s.id, user)
+        assert got is not None
+        assert got.coach_model == "claude-haiku"
+
+
+async def test_reset_carries_coach_model_forward(sessionmaker: async_sessionmaker):
+    """Mirrors reset_session's persistence: the chosen model is re-validated and carried onto the
+    fresh row, so a reset keeps the learner's model selection."""
+    user, problem = f"itest-{uuid4()}", "itest/model-reset"
+    async with sessionmaker() as db:
+        first = await repo.create(
+            db,
+            user_sub=user,
+            problem_id=problem,
+            origin="your_turn",
+            rubric_version="t",
+            coach_model="claude-haiku",
+        )
+        await db.commit()
+        first_id = first.id
+    # What reset_session does: abandon the active row, then re-create carrying the re-validated key.
+    async with sessionmaker() as db:
+        locked = await repo.get_for_user_locked(db, first_id, user)
+        assert locked is not None
+        locked.status = "abandoned"
+        # claude-haiku is a BYOK model now, so re-validate against the BYOK tier (matches reset_session).
+        carried = catalog.validate_choice(locked.coach_model, Tier.BYOK).key
+        fresh = await repo.create(
+            db,
+            user_sub=user,
+            problem_id=problem,
+            origin="your_turn",
+            rubric_version="t",
+            coach_model=carried,
+        )
+        await db.commit()
+        fresh_id = fresh.id
+    async with sessionmaker() as db:
+        active = await repo.get_active(db, user, problem)
+        assert active is not None
+        assert active.id == fresh_id  # the fresh row is now the single active session
+        assert active.coach_model == "claude-haiku"  # selection survived the reset
 
 
 async def test_wrong_step_raises_mismatch(sessionmaker: async_sessionmaker):

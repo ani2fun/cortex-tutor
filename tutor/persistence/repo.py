@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +66,19 @@ async def get_for_user_locked(db: AsyncSession, session_id: UUID, user_sub: str)
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def count_sessions_for_user(
+    db: AsyncSession, user_sub: str, statuses: tuple[str, ...] = ("active", "completed")
+) -> int:
+    """How many sessions a user keeps — for storage quotas. Excludes abandoned by default, and hard
+    deletes don't count; backed by ``idx_session_user (user_sub, status)``."""
+    stmt = (
+        select(func.count())
+        .select_from(models.Session)
+        .where(models.Session.user_sub == user_sub, models.Session.status.in_(statuses))
+    )
+    return int((await db.execute(stmt)).scalar_one())
+
+
 async def create(
     db: AsyncSession,
     *,
@@ -74,6 +87,7 @@ async def create(
     origin: str,
     rubric_version: str,
     byok: bool = False,
+    coach_model: str | None = None,
     model_hint: str | None = None,
 ) -> models.Session:
     now = _now()
@@ -90,6 +104,7 @@ async def create(
         rubric_version=rubric_version,
         summary_msg_seq=0,
         byok=byok,
+        coach_model=coach_model,  # stable catalog key (e.g. "claude-sonnet"), resolved per turn
         model_hint=model_hint,
         input_tokens=0,
         output_tokens=0,
@@ -120,6 +135,7 @@ async def append_message(
     content: str,
     turn_id: UUID | None = None,
     content_json: dict | None = None,
+    model: str | None = None,
     input_tokens: int = 0,
     output_tokens: int = 0,
     cost_usd: float = 0,
@@ -131,6 +147,7 @@ async def append_message(
         step=step,
         content=content,
         content_json=content_json,
+        model=model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
@@ -163,6 +180,37 @@ async def find_by_turn(db: AsyncSession, session_id: UUID, turn_id: UUID) -> mod
         models.Message.turn_id == turn_id,
     )
     return (await db.execute(stmt)).scalars().first()
+
+
+async def set_coach_model(
+    db: AsyncSession, *, session_id: UUID, expected_version: int, coach_model: str, byok: bool
+) -> bool:
+    """Re-point an active session's coach model (and its derived transport ``byok``) with optimistic
+    concurrency — the same ``WHERE version = expected`` guard as ``save_state``. Returns ``False``
+    (→ 409) if a turn advanced the session first. Messages and FSM state are untouched."""
+    result = await db.execute(
+        update(models.Session)
+        .where(models.Session.id == session_id, models.Session.version == expected_version)
+        .values(coach_model=coach_model, byok=byok, version=expected_version + 1, updated_at=_now())
+    )
+    return result.rowcount == 1
+
+
+async def delete_for_problem(db: AsyncSession, user_sub: str, problem_id: str) -> int:
+    """Hard-delete all of a user's sessions for one problem (messages/gate/grounding cascade via the
+    FK ``ON DELETE CASCADE``). Returns the session count removed."""
+    result = await db.execute(
+        delete(models.Session).where(
+            models.Session.user_sub == user_sub, models.Session.problem_id == problem_id
+        )
+    )
+    return result.rowcount
+
+
+async def delete_all_for_user(db: AsyncSession, user_sub: str) -> int:
+    """Hard-delete EVERY coach session (and cascaded children) the user owns. Returns the count."""
+    result = await db.execute(delete(models.Session).where(models.Session.user_sub == user_sub))
+    return result.rowcount
 
 
 async def save_state(

@@ -273,7 +273,12 @@ async def apply_byok_turn(
         latency_ms=0,
     )
     await repo.append_message(
-        db, session_id=session.id, role="coach", step=state.step.value, content=coach_reply
+        db,
+        session_id=session.id,
+        role="coach",
+        step=state.step.value,
+        content=coach_reply,
+        model=session.coach_model,
     )
     advanced_ok = await repo.save_state(
         db,
@@ -314,7 +319,11 @@ async def apply_byok_turn(
     )
 
 
-async def record_coach_reply(db: AsyncSession, *, session_id: UUID, step: Step, content: str) -> None:
-    """Persist the streamed coach reply after the stream completes."""
-    await repo.append_message(db, session_id=session_id, role="coach", step=step.value, content=content)
+async def record_coach_reply(
+    db: AsyncSession, *, session_id: UUID, step: Step, content: str, model: str | None = None
+) -> None:
+    """Persist the streamed coach reply after the stream completes (tagged with the coach model)."""
+    await repo.append_message(
+        db, session_id=session_id, role="coach", step=step.value, content=content, model=model
+    )
     await db.commit()

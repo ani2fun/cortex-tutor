@@ -18,6 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 
 from tutor.config import Settings, get_settings
+from tutor.models.catalog import Tier
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,12 @@ def wants_byok(principal: Principal, settings: Settings) -> bool:
     if settings.force_byok:
         return True
     return settings.auth_enabled and not is_homelab(principal, settings)
+
+
+def tier_for(principal: Principal, settings: Settings) -> Tier:
+    """The caller's coach tier — BYOK (client-direct) or HOMELAB (server key). A thin alias over
+    ``wants_byok`` so the homelab-vs-BYOK decision stays single-sourced."""
+    return Tier.BYOK if wants_byok(principal, settings) else Tier.HOMELAB
 
 
 # Convenience alias for route signatures.
