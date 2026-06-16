@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# One-command dev mode for cortex-tutor: Postgres (Docker, :5433) + Liquibase
+# migrate + the FastAPI tutor with autoreload on :8000. Mirrors the sibling
+# `cortex/bin/dev` in style (port pre-flight, coloured prefixed logs, env
+# defaults, Ctrl-C tears everything down). The grounding MCP (:8001) is a
+# future seam (commented in docker-compose.yml) and is not started here.
+#
+# Runs the STORES in compose but the APP locally via uvicorn --reload, so :8000
+# stays free for the reload server (vs `make up`, which also containerises the
+# app on :8000). For the full container path use `make up`.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+APP_PORT=8000
+PG_PORT=5433
+
+# ---- helpers -------------------------------------------------------------
+
+c_reset=$'\033[0m'
+c_db=$'\033[36m'      # cyan
+c_app=$'\033[33m'     # yellow
+c_meta=$'\033[32m'    # green
+
+prefix() { local label="$1" colour="$2"; sed -u -e "s/^/${colour}[${label}]${c_reset} /"; }
+log()    { printf "%s[dev]%s %s\n" "$c_meta" "$c_reset" "$*"; }
+warn()   { printf "%s[dev]%s %s\n" $'\033[31m' "$c_reset" "$*" >&2; }
+
+port_pids() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null || true; }
+
+PIDS=()
+_cleaned=
+cleanup() {
+  [[ -n "$_cleaned" ]] && return   # trapped on INT *and* EXIT — only sweep once
+  _cleaned=1
+  log "shutting down…"
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "$pid" 2>/dev/null || true; done
+  # Kill anything still holding the app port (a detached uvicorn reloader child).
+  local stragglers
+  stragglers="$(port_pids "$APP_PORT")"
+  if [[ -n "$stragglers" ]]; then
+    log "killing leftover process(es) on :$APP_PORT — ${stragglers//$'\n'/ }"
+    kill $stragglers 2>/dev/null || true
+  fi
+  # Leave the Postgres container running (cheap + stateful); `docker compose down`
+  # to stop it, `-v` to wipe the volume.
+}
+trap cleanup EXIT INT TERM
+
+# ---- 1. Pre-flight: free the app port -----------------------------------
+
+pids="$(port_pids "$APP_PORT")"
+if [[ -n "$pids" ]]; then
+  warn "port $APP_PORT (uvicorn) is in use by PID(s): ${pids//$'\n'/ } — freeing it…"
+  kill $pids 2>/dev/null || true
+  sleep 2
+  pids="$(port_pids "$APP_PORT")"
+  if [[ -n "$pids" ]]; then
+    warn "still in use — stop the conflicting process and retry."; exit 1
+  fi
+fi
+
+# ---- 1b. Auth gate: OFF by default for local dev ------------------------
+#
+# OFF by default → the tutor accepts a synthetic dev principal (see tutor/auth.py),
+# so the coach works with no Keycloak. To exercise the BYOK path, set FORCE_BYOK=true
+# in .env (then the synthetic principal is forced to the BYOK tier — the "devcombined"
+# scenario). To exercise the FULL Keycloak flow, set AUTH_ENABLED=true.
+export AUTH_ENABLED="${AUTH_ENABLED:-false}"
+
+# When auth is ON, default the issuer to cortex's LOCAL Keycloak (realm `cortex`
+# on :8081) — NOT the prod default in .env.example. Cortex issues local tokens,
+# so the tutor must validate against the SAME local realm or every JWT 401s.
+# (devcombined runs cortex's bin/dev, which starts that Keycloak.)
+if [[ "$AUTH_ENABLED" == "true" ]]; then
+  export KEYCLOAK_ISSUER_URL="${KEYCLOAK_ISSUER_URL:-http://localhost:8081/realms/cortex}"
+  export KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID:-cortex-web}"
+fi
+
+# ---- 1c. .env bootstrap --------------------------------------------------
+
+if [[ ! -f .env ]]; then
+  log "no .env — copying .env.example (fill ANTHROPIC_API_KEY for the homelab-tier coach)"
+  cp .env.example .env
+fi
+
+# ---- 2. Toolchain: uv + venv --------------------------------------------
+
+if ! command -v uv >/dev/null 2>&1; then
+  warn "uv not found. Install it:  curl -LsSf https://astral.sh/uv/install.sh | sh"
+  exit 1
+fi
+if [[ ! -d .venv ]]; then
+  log "creating the venv (uv sync — installs Python 3.12 if needed)…"
+  uv sync | prefix "uv" "$c_app"
+fi
+
+# ---- 3. Docker pre-flight (locate binary + daemon) ----------------------
+
+if ! command -v docker >/dev/null 2>&1; then
+  if [[ -x /Applications/Docker.app/Contents/Resources/bin/docker ]]; then
+    log "docker not on \$PATH — using bundled binary from Docker.app"
+    export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
+  else
+    warn "docker not found. Install Docker Desktop or a compatible runtime."; exit 1
+  fi
+fi
+if ! docker info >/dev/null 2>&1; then
+  warn "docker CLI is available but the daemon isn't responding. Start Docker and retry:"
+  warn "    open -ga Docker"
+  exit 1
+fi
+
+# ---- 4. Backing store: Postgres on :5433 --------------------------------
+
+log "starting Postgres (docker compose, host :$PG_PORT)…"
+docker compose up -d postgres
+log "waiting for Postgres to be healthy…"
+status=starting
+for _ in $(seq 1 30); do
+  status="$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q postgres)" 2>/dev/null || echo starting)"
+  [[ "$status" == "healthy" ]] && break
+  sleep 1
+done
+if [[ "$status" != "healthy" ]]; then
+  warn "Postgres did not become healthy within 30s (last status: ${status})."
+  warn "    inspect with:  docker compose logs postgres"
+  exit 1
+fi
+
+# ---- 5. Liquibase migrate (the `tutor` schema) --------------------------
+
+log "applying Liquibase migrations (tutor schema)…"
+docker compose run --rm liquibase 2> >(prefix "liquibase" "$c_db" >&2) | prefix "liquibase" "$c_db"
+
+# ---- 5b. Key sanity --------------------------------------------------------
+
+if ! grep -qE '^ANTHROPIC_API_KEY=.+' .env 2>/dev/null; then
+  warn "ANTHROPIC_API_KEY is unset in .env — the homelab-tier (server-key) coach and the gate"
+  warn "will fail; BYOK turns (client-direct on the visitor's own key) still work."
+fi
+
+# ---- 6. The FastAPI tutor (uvicorn --reload on :8000) -------------------
+
+log "starting the tutor (uvicorn --reload on http://localhost:${APP_PORT})…"
+log "  health:   http://localhost:${APP_PORT}/healthz   ready: /readyz"
+log "  Postgres: localhost:${PG_PORT}  (user/pass: cortex)   schema: tutor"
+log "  Auth:     ${AUTH_ENABLED} (synthetic dev principal when off; set FORCE_BYOK=true in .env for the BYOK path)"
+log "  Ctrl-C stops the server (Postgres keeps running — 'docker compose down' to stop it)"
+
+# stdout+stderr both via process substitution (not a pipe) so $! is the uvicorn
+# job itself — not the tail `sed` — and cleanup's kill targets the real server.
+uv run uvicorn tutor.app:app --reload --port "$APP_PORT" \
+  > >(prefix "tutor" "$c_app") \
+  2> >(prefix "tutor" "$c_app" >&2) &
+PIDS+=($!)
+
+wait "${PIDS[@]}"

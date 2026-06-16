@@ -39,10 +39,17 @@ scalability/trade-off analysis: **[ADR 0001](docs/adr/0001-fastapi-python-tutor-
 uv sync                      # create the venv (installs Python 3.12 if needed)
 cp .env.example .env         # fill in ANTHROPIC_API_KEY etc. (or AUTH_ENABLED=false to skip Keycloak)
 make test                    # run the suite (the pure FSM has no external deps)
-make dev                     # FastAPI on :8000
-# full polyglot stack (tutor + grounding MCP + postgres/redis/keycloak):
-make up
+
+./bin/dev                    # ★ one command: Postgres (:5433) + migrate + FastAPI autoreload (:8000)
+# — or the underlying make targets directly:
+make dev                     # FastAPI autoreload on :8000 (assumes stores already up)
+make up                      # full container stack (postgres + liquibase + tutor) on :8000
 ```
+
+> **Run both stacks together** (this tutor + the Scala `cortex` app, so the SPA's live coach works
+> end-to-end) with **`cortex/scripts/devcombined`** from the sibling `cortex` repo — it launches
+> `cortex/bin/dev` and this `bin/dev` and wires `CORTEX_TUTOR_BASE_URL`. Requires cortex and cortex-tutor
+> to be siblings under one parent dir.
 
 ## Layout
 
@@ -65,3 +72,15 @@ evals/                              # gate-judge + coach eval suites (CI-gated)
 
 > Secrets (`ANTHROPIC_API_KEY`, `MCP_SERVICE_TOKEN`) are never committed and never logged. BYOK keys
 > never reach this server.
+
+## Learn more
+
+A first-principles tour of this service — the gate/coach split, the six-step FSM, tiers & BYOK, the
+turn lifecycle (SSE vs client-direct), and the grounding MCP + the `socratic-tutor` skill — lives in
+the Cortex **Cortex Onboarding** book:
+
+- **[Cortex Tutor section](https://cortex.kakde.eu/cortex-onboarding/cortex-tutor/what-the-tutor-is)** — what it is, architecture, tiers & BYOK, the turn lifecycle, grounding & the skill.
+- **[Runbooks → Launch the Tutor](https://cortex.kakde.eu/cortex-onboarding/runbooks/local-dev/launch-the-tutor)** — wiring this service to the SPA locally (ports, env, the JWT detail).
+- **[System Design → Cortex storage & cost](https://cortex.kakde.eu/system-design/capstones/cortex-storage-and-cost)** — the per-coached-session token-cost model and why BYOK is what makes the tutor scale.
+
+Contract source of truth: [`api/tutor-openapi.yaml`](api/tutor-openapi.yaml) (the cortex Scala client hand-ports it into `shared/.../tutor/TutorContract.scala`).
