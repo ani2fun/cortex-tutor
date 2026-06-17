@@ -14,11 +14,18 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tutor.config import get_settings
 from tutor.persistence import models
 
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
+
+
+def _ttl_delta() -> dt.timedelta:
+    """Sliding session lifetime — set at create, refreshed on each turn / model switch (save_state /
+    set_coach_model), and swept by ``purge.purge_expired`` once it lapses. Durable saves live in cortex."""
+    return dt.timedelta(hours=get_settings().coach_session_ttl_hours)
 
 
 async def get_active(db: AsyncSession, user_sub: str, problem_id: str) -> models.Session | None:
@@ -112,7 +119,7 @@ async def create(
         version=0,
         created_at=now,
         updated_at=now,
-        expires_at=now + dt.timedelta(days=90),
+        expires_at=now + _ttl_delta(),
     )
     db.add(row)
     await db.flush()
@@ -191,7 +198,13 @@ async def set_coach_model(
     result = await db.execute(
         update(models.Session)
         .where(models.Session.id == session_id, models.Session.version == expected_version)
-        .values(coach_model=coach_model, byok=byok, version=expected_version + 1, updated_at=_now())
+        .values(
+            coach_model=coach_model,
+            byok=byok,
+            version=expected_version + 1,
+            updated_at=_now(),
+            expires_at=_now() + _ttl_delta(),  # slide the TTL on a model switch too
+        )
     )
     return result.rowcount == 1
 
@@ -241,6 +254,7 @@ async def save_state(
             last_turn_id=last_turn_id,
             version=expected_version + 1,
             updated_at=_now(),
+            expires_at=_now() + _ttl_delta(),  # slide the TTL on activity (ephemeral = idle for TTL)
         )
     )
     return (await db.execute(stmt)).rowcount == 1

@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     coach_max_sessions_per_user: int = 25
     coach_max_messages_per_session: int = 120  # ~60 turns (a user + coach row per turn)
 
+    # ── Ephemeral sessions: the tutor is a working store, not the archive. A session is purged after
+    # this many hours of INACTIVITY (the window slides on each turn / model switch). Durable "keep this"
+    # lives in cortex (POST /api/coach/saved, allow-listed). Generous so a multi-day interview survives.
+    coach_session_ttl_hours: int = 48
+
     @property
     def homelab_users(self) -> set[str]:
         return {u.strip() for u in self.coach_homelab_users.split(",") if u.strip()}

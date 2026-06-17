@@ -7,6 +7,7 @@ hang off.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -21,6 +22,7 @@ from tutor.auth import CurrentPrincipal, tier_for
 from tutor.config import get_settings
 from tutor.models import catalog
 from tutor.persistence.db import make_engine, make_sessionmaker
+from tutor.persistence.purge import purge_expired
 from tutor.ratelimit import make_limiters
 from tutor.routes import sessions as sessions_routes
 
@@ -40,9 +42,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         coach_model=settings.coach_model,
         gate_model=settings.gate_model,
     )
+
+    # Ephemeral sessions: sweep expired (idle) sessions on startup, then hourly. Single-replica app,
+    # so an in-process task suffices — no CronJob. Durable saves live in cortex and are untouched.
+    async def _purge_loop() -> None:
+        while True:
+            try:
+                removed = await purge_expired(app.state.sessionmaker)
+                if removed:
+                    log.info("tutor.session_purge", removed=removed)
+            except Exception:
+                log.exception("tutor.session_purge_failed")
+            await asyncio.sleep(3600)
+
+    purge_task = asyncio.create_task(_purge_loop())
     try:
         yield
     finally:
+        purge_task.cancel()
         await engine.dispose()
 
 

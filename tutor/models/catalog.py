@@ -135,7 +135,7 @@ _CATALOG: dict[str, CatalogEntry] = {
 }
 
 # Per-tier default coach model: homelab → the local wk-1 model; byok → Claude Sonnet via OpenRouter
-# (the primary BYOK path — one key, any model).
+# (the primary BYOK path — one key, any model; the strongest coach makes it the default pick).
 _DEFAULT_BY_TIER: dict[Tier, str] = {Tier.HOMELAB: "qwen-coach", Tier.BYOK: "or-claude-sonnet"}
 
 
