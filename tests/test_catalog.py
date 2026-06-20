@@ -71,16 +71,16 @@ def test_homelab_sees_local_plus_cloud_under_dual_mode():
     assert byok == [e.key for e in catalog.available_models(Tier.BYOK)]
 
 
-def test_default_is_local_for_homelab_and_openrouter_gemini_for_byok():
+def test_default_is_local_for_homelab_and_openrouter_claude_sonnet_for_byok():
     assert catalog.default_model(Tier.HOMELAB).key == "qwen-coach"
-    assert catalog.default_model(Tier.BYOK).key == "or-gemini-flash"
+    assert catalog.default_model(Tier.BYOK).key == "or-claude-sonnet"
 
 
 # ── validate_choice: fail closed ─────────────────────────────────────────────────────────────
 
 
 def test_validate_choice_none_returns_tier_default():
-    assert catalog.validate_choice(None, Tier.BYOK).key == "or-gemini-flash"
+    assert catalog.validate_choice(None, Tier.BYOK).key == "or-claude-sonnet"
     assert catalog.validate_choice(None, Tier.HOMELAB, has_local=True).key == "qwen-coach"
 
 
@@ -136,10 +136,10 @@ def test_resolve_byok_openrouter_is_client_direct_with_slug():
     assert (res.entry.key, res.entry.model_id) == ("or-gemini-flash", "google/gemini-2.5-flash")
 
 
-def test_resolve_byok_none_key_uses_openrouter_gemini_default():
+def test_resolve_byok_none_key_uses_openrouter_claude_sonnet_default():
     res = _resolve(Tier.BYOK, key=None, server_key=False)
-    assert (res.entry.key, res.mode) == ("or-gemini-flash", CredentialMode.CLIENT_DIRECT)
-    assert res.entry.model_id == "google/gemini-2.5-flash"  # the OpenRouter slug handed to the client
+    assert (res.entry.key, res.mode) == ("or-claude-sonnet", CredentialMode.CLIENT_DIRECT)
+    assert res.entry.model_id == "anthropic/claude-sonnet-4.6"  # the OpenRouter slug handed to the client
 
 
 def test_resolve_homelab_selected_local_streams_when_configured():
