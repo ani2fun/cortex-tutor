@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from pydantic import ValidationError
-from tutor.domain.steps import Step
+from tutor.domain.steps import Step, Track
 from tutor.domain.verdict import GateVerdict, Verdict
 from tutor.orchestration import coach as coach_orch
 
@@ -43,34 +43,43 @@ def test_build_coach_system_includes_rubric_step_and_problem():
 
 def test_directive_completed_is_a_wrap_up():
     v = GateVerdict(verdict=Verdict.PASS, score=100)
-    d = coach_orch._directive(v, advanced=True, completed=True).lower()
+    d = coach_orch._directive(v, advanced=True, completed=True, track=Track.PROBLEM).lower()
     assert "final" in d
     assert "complexity" in d
 
 
+def test_directive_completed_conceptual_drops_complexity_for_the_bigger_picture():
+    # The conceptual wrap-up has no code → no Big-O; it connects the idea to the bigger picture.
+    v = GateVerdict(verdict=Verdict.PASS, score=100)
+    d = coach_orch._directive(v, advanced=True, completed=True, track=Track.CONCEPTUAL).lower()
+    assert "final" in d
+    assert "complexity" not in d
+    assert "bigger picture" in d
+
+
 def test_directive_advanced_opens_next_step():
     v = GateVerdict(verdict=Verdict.PASS, score=90)
-    d = coach_orch._directive(v, advanced=True, completed=False).lower()
+    d = coach_orch._directive(v, advanced=True, completed=False, track=Track.PROBLEM).lower()
     assert "next" in d
     assert "final" not in d  # not the completion wrap-up
 
 
 def test_directive_question_answers_in_guardrail():
     v = GateVerdict(verdict=Verdict.QUESTION)
-    d = coach_orch._directive(v, advanced=False, completed=False).lower()
+    d = coach_orch._directive(v, advanced=False, completed=False, track=Track.PROBLEM).lower()
     assert "question" in d
     assert "spoiler" in d  # stays within the step's guardrails
 
 
 def test_directive_off_topic_redirects():
     v = GateVerdict(verdict=Verdict.OFF_TOPIC)
-    d = coach_orch._directive(v, advanced=False, completed=False).lower()
+    d = coach_orch._directive(v, advanced=False, completed=False, track=Track.PROBLEM).lower()
     assert "redirect" in d
 
 
 def test_directive_retry_nudges_at_hint_level():
     v = GateVerdict(verdict=Verdict.RETRY, missing=["no restatement"], next_hint_level=2)
-    d = coach_orch._directive(v, advanced=False, completed=False)
+    d = coach_orch._directive(v, advanced=False, completed=False, track=Track.PROBLEM)
     assert "no restatement" in d  # the gate's missing reasons steer the nudge
     assert "hint level 2" in d
     assert "never the answer" in d.lower()
@@ -157,6 +166,7 @@ def test_coach_system_prompt_does_not_instruct_verdict_json():
             GateVerdict(verdict=Verdict.RETRY, missing=["a contrasting approach"], next_hint_level=2),
             advanced=False,
             completed=False,
+            track=Track.PROBLEM,
         )
     )
     assert "rubric_hits" not in full

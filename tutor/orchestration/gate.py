@@ -16,7 +16,7 @@ from typing import Literal
 import structlog
 from pydantic import ValidationError
 
-from tutor.domain.steps import Step
+from tutor.domain.steps import Step, track_of
 from tutor.domain.verdict import SCORE_VALUES, GateVerdict, Verdict
 from tutor.models.base import ChatMessage, GateProvider
 from tutor.skills import loader
@@ -63,9 +63,10 @@ def gate_tool_schema() -> dict:
 
 def build_gate_system(step: Step, problem_context: str) -> str:
     """The lean grader prompt + the current step's gate criterion + the grounded problem. Uses the
-    gate-specific prompt (not the full coach rubric) to keep the prompt small for CPU inference."""
+    gate-specific prompt (not the full coach rubric) to keep the prompt small for CPU inference.
+    The gate prompt is the one for the step's own track (problem vs conceptual)."""
     return (
-        f"{loader.gate_prompt()}\n\n"
+        f"{loader.gate_prompt(track_of(step))}\n\n"
         f"---\n\n## Current step: {step.value}\n\n{loader.step_guide(step)}\n\n"
         f"---\n\n## Problem context\n\n{problem_context}"
     )

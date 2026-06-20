@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tutor.config import get_settings
+from tutor.domain import steps
 from tutor.persistence import models
 
 
@@ -93,6 +94,7 @@ async def create(
     problem_id: str,
     origin: str,
     rubric_version: str,
+    track: steps.Track = steps.Track.PROBLEM,
     byok: bool = False,
     coach_model: str | None = None,
     model_hint: str | None = None,
@@ -103,8 +105,10 @@ async def create(
         user_sub=user_sub,
         problem_id=problem_id,
         origin=origin,
+        track=track.value,
         status="active",
-        current_step="clarify",
+        # The fresh session starts on its track's first step (clarify | explain).
+        current_step=steps.first_step(track).value,
         step_index=0,
         attempts=0,
         hint_level=0,

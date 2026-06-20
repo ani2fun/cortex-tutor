@@ -16,7 +16,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tutor.domain.fsm import SessionState, SessionStatus, transition
-from tutor.domain.steps import Step, step_index
+from tutor.domain.steps import Step, step_index, track_of
 from tutor.domain.verdict import GateVerdict
 from tutor.models.base import ChatMessage, GateProvider
 from tutor.orchestration import gate
@@ -67,12 +67,15 @@ async def apply_turn(
 ) -> TurnOutcome:
     session = await repo.get_active_locked(db, user_sub, problem_id)
     if session is None:
+        # Fallback lazy-create (the SPA normally creates the session up front). The submitted step's
+        # track decides the ladder — a first turn is always that track's first step, so they match.
         session = await repo.create(
             db,
             user_sub=user_sub,
             problem_id=problem_id,
             origin=origin,
             rubric_version=loader.rubric_version(),
+            track=track_of(step),
         )
 
     # Idempotency — this exact answer-turn already committed? Replay (no re-advance, no re-coach).

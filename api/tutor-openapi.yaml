@@ -267,8 +267,11 @@ components:
   schemas:
     Step:
       type: string
-      description: One of the six coaching steps, in order.
-      enum: [clarify, examples, approach, plan, implement, test]
+      description: |
+        A coaching step. The `problem` track runs the six coding steps
+        (clarify → examples → approach → plan → implement → test); the `conceptual` track runs the
+        four understanding steps (explain → apply → analyze → defend).
+      enum: [clarify, examples, approach, plan, implement, test, explain, apply, analyze, defend]
     Verdict:
       type: string
       description: The gate model's classification of the learner's answer.
@@ -282,6 +285,12 @@ components:
     SessionStatus:
       type: string
       enum: [active, completed]
+    Track:
+      type: string
+      description: |
+        Which coaching ladder a session runs — `problem` (the six-step coding interview) or
+        `conceptual` (the four-step understanding check for prose lessons). Pinned at creation.
+      enum: [problem, conceptual]
 
     HealthStatus:
       type: object
@@ -367,6 +376,9 @@ components:
         sessionId: { type: string, format: uuid }
         problemId: { type: string }
         origin: { $ref: "#/components/schemas/SessionOrigin" }
+        track:
+          allOf: [{ $ref: "#/components/schemas/Track" }]
+          description: "Which coaching ladder this session runs (pinned at creation; defaults to problem)."
         status: { $ref: "#/components/schemas/SessionStatus" }
         currentStep: { $ref: "#/components/schemas/Step" }
         stepIndex: { type: integer, format: int32 }
@@ -401,6 +413,12 @@ components:
         origin:
           allOf: [{ $ref: "#/components/schemas/SessionOrigin" }]
           default: your_turn
+        track:
+          allOf: [{ $ref: "#/components/schemas/Track" }]
+          default: problem
+          description: |
+            Which coaching ladder to run — `conceptual` for a prose-lesson understanding check
+            (the `concept-coach` block), else `problem`. Pinned at creation; `reset` carries it forward.
         model:
           type: string
           nullable: true

@@ -10,7 +10,17 @@ from tutor.domain.fsm import (
     SessionStatus,
     transition,
 )
-from tutor.domain.steps import STEP_ORDER, Step, is_terminal, next_step, step_index
+from tutor.domain.steps import (
+    STEP_ORDER,
+    STEP_ORDER_BY_TRACK,
+    Step,
+    Track,
+    first_step,
+    is_terminal,
+    next_step,
+    step_index,
+    track_of,
+)
 from tutor.domain.verdict import GateVerdict, Verdict
 
 # ── steps ordering ───────────────────────────────────────────────────────────
@@ -33,6 +43,50 @@ def test_next_step_walks_then_stops():
     assert next_step(Step.IMPLEMENT) is Step.TEST
     assert next_step(Step.TEST) is None
     assert is_terminal(Step.TEST) and not is_terminal(Step.CLARIFY)
+
+
+# ── conceptual track: a second four-step ladder sharing the same FSM ───────────
+
+
+def test_conceptual_track_ordering_and_navigation():
+    order = STEP_ORDER_BY_TRACK[Track.CONCEPTUAL]
+    assert order == (Step.EXPLAIN, Step.APPLY, Step.ANALYZE, Step.DEFEND)
+    # step_index is per-track: conceptual steps are 0..3, not offset by the six coding steps.
+    assert [step_index(s) for s in order] == [0, 1, 2, 3]
+    assert next_step(Step.EXPLAIN) is Step.APPLY
+    assert next_step(Step.DEFEND) is None
+    assert is_terminal(Step.DEFEND) and not is_terminal(Step.EXPLAIN)
+
+
+def test_track_of_maps_each_step_to_its_track():
+    for s in STEP_ORDER_BY_TRACK[Track.PROBLEM]:
+        assert track_of(s) is Track.PROBLEM
+    for s in STEP_ORDER_BY_TRACK[Track.CONCEPTUAL]:
+        assert track_of(s) is Track.CONCEPTUAL
+
+
+def test_first_step_per_track():
+    assert first_step(Track.PROBLEM) is Step.CLARIFY
+    assert first_step(Track.CONCEPTUAL) is Step.EXPLAIN
+
+
+def test_conceptual_pass_advances_and_completes_after_defend():
+    order = STEP_ORDER_BY_TRACK[Track.CONCEPTUAL]
+    state = SessionState(step=Step.EXPLAIN)
+    seen = []
+    for _ in range(len(order)):
+        seen.append(state.step)
+        state = transition(state, GateVerdict(verdict=Verdict.PASS, score=80)).state
+    assert seen == list(order)  # walked explain → apply → analyze → defend, one at a time
+    assert state.status is SessionStatus.COMPLETED
+    assert set(state.scores) == set(order)
+
+
+def test_conceptual_never_jumps_to_the_coding_track():
+    # The step encodes its track, so a conceptual step can only advance within the conceptual ladder.
+    assert next_step(Step.ANALYZE) is Step.DEFEND
+    t = transition(SessionState(step=Step.ANALYZE), GateVerdict(verdict=Verdict.PASS, score=90))
+    assert t.state.step is Step.DEFEND
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

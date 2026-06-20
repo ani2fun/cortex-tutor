@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tutor.domain.steps import STEP_ORDER
+from tutor.domain.steps import STEP_ORDER, STEP_ORDER_BY_TRACK, Track
 from tutor.skills import loader
 
 
@@ -27,6 +27,35 @@ def test_every_step_has_a_guide_with_a_gate_criterion():
         guide = loader.step_guide(step)
         assert "Gate criterion" in guide
         assert "Pass threshold" in guide
+
+
+# ── conceptual track: its own rubric tree (.claude/skills/conceptual-tutor/) ───
+
+
+def test_conceptual_coach_prompt_has_persona_without_verdict_contract():
+    cp = loader.coach_prompt(Track.CONCEPTUAL)
+    assert "Cortex Tutor" in cp
+    assert "Coach, don't lecture" in cp  # the conceptual prime directive
+    # Same regression guard as the coding coach: the coach must not carry the gate's output contract.
+    assert "rubric_hits" not in cp
+    assert "next_hint_level" not in cp
+
+
+def test_conceptual_gate_prompt_is_the_lean_grader():
+    gp = loader.gate_prompt(Track.CONCEPTUAL)
+    assert "gate" in gp.lower()
+    assert "Coach, don't lecture" not in gp
+
+
+def test_every_conceptual_step_has_a_guide_with_a_gate_criterion():
+    for step in STEP_ORDER_BY_TRACK[Track.CONCEPTUAL]:
+        guide = loader.step_guide(step)
+        assert "Gate criterion" in guide
+        assert "Pass threshold" in guide
+
+
+def test_problem_and_conceptual_coach_prompts_differ():
+    assert loader.coach_prompt(Track.PROBLEM) != loader.coach_prompt(Track.CONCEPTUAL)
 
 
 def test_rubric_version_is_stable_short_hash():

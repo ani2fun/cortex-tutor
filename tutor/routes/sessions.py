@@ -22,7 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from tutor.auth import CurrentPrincipal, tier_for
 from tutor.config import get_settings
-from tutor.domain.steps import Step
+from tutor.domain.steps import Step, Track
 from tutor.grounding import context as grounding_context
 from tutor.grounding.mcp_client import GroundingClient
 from tutor.models import catalog
@@ -126,6 +126,7 @@ def _session_payload(s: models.Session, history: list[models.Message]) -> dict:
         "sessionId": str(s.id),
         "problemId": s.problem_id,
         "origin": s.origin,
+        "track": s.track,
         "status": s.status,
         "currentStep": s.current_step,
         "stepIndex": s.step_index,
@@ -179,6 +180,12 @@ async def create_session(principal: CurrentPrincipal, body: dict, request: Reque
     if not isinstance(problem_id, str) or len(problem_id) > 256:
         raise HTTPException(status_code=413, detail="problemId exceeds 256 characters")
     origin = body.get("origin") or "your_turn"
+    # Which coaching ladder to run — pinned at creation (the conceptual block sends "conceptual";
+    # everything else defaults to the six-step coding track).
+    try:
+        track = Track(body.get("track") or "problem")
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"invalid track: {body.get('track')}") from None
     settings = get_settings()
     tier = tier_for(principal, settings)
     # Validate the client's model choice against the tier allow-list — fail closed on anything
@@ -202,6 +209,7 @@ async def create_session(principal: CurrentPrincipal, body: dict, request: Reque
                 user_sub=principal.sub,
                 problem_id=problem_id,
                 origin=origin,
+                track=track,
                 rubric_version=loader.rubric_version(),
                 # Transport/funding follows the model's PROVIDER, not the tier: a cloud pick is
                 # client-direct on the user's key (byok), the local model is server-streamed.
@@ -251,7 +259,7 @@ async def reset_session(session_id: UUID, principal: CurrentPrincipal, request: 
         s = await repo.get_for_user_locked(db, session_id, principal.sub)
         if s is None:
             raise HTTPException(status_code=404, detail="session not found")
-        problem_id, origin, prior_model = s.problem_id, s.origin, s.coach_model
+        problem_id, origin, prior_model, track = s.problem_id, s.origin, s.coach_model, Track(s.track)
         # Carry the chosen model forward; re-validate so reset also migrates a model that became
         # disallowed for the (re-derived) tier back to the default.
         try:
@@ -266,6 +274,7 @@ async def reset_session(session_id: UUID, principal: CurrentPrincipal, request: 
             user_sub=principal.sub,
             problem_id=problem_id,
             origin=origin,
+            track=track,
             rubric_version=loader.rubric_version(),
             byok=model_entry.provider is not catalog.Provider.OLLAMA,
             coach_model=model_entry.key,

@@ -9,26 +9,32 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from tutor.domain.steps import Step
+from tutor.domain.steps import Step, Track, track_of
 from tutor.domain.verdict import GateVerdict, Verdict
 from tutor.models.base import ChatMessage, CoachProvider
 from tutor.skills import loader
 
 
 def build_coach_system(step: Step, problem_context: str) -> str:
-    """Coach persona (no verdict contract) + the current step's guide + the grounded problem."""
+    """Coach persona (no verdict contract) + the current step's guide + the grounded problem. The
+    persona is the one for the step's own track (problem vs conceptual)."""
     return (
-        f"{loader.coach_prompt()}\n\n"
+        f"{loader.coach_prompt(track_of(step))}\n\n"
         f"---\n\n## Current step: {step.value}\n\n{loader.step_guide(step)}\n\n"
         f"---\n\n## Problem context\n\n{problem_context}"
     )
 
 
-def _directive(verdict: GateVerdict, advanced: bool, completed: bool) -> str:
+def _directive(verdict: GateVerdict, advanced: bool, completed: bool, track: Track) -> str:
     if completed:
+        closer = (
+            "the final Time/Space complexity"
+            if track is Track.PROBLEM
+            else "how it connects to the bigger picture"
+        )
         return (
             "The learner just cleared the FINAL step. Give a short, warm wrap-up: one thing they did "
-            "well, the single key takeaway, and the final Time/Space complexity."
+            f"well, the single key takeaway, and {closer}."
         )
     if advanced:
         return (
@@ -64,6 +70,6 @@ def stream_coach(
     system = (
         build_coach_system(step, problem_context)
         + "\n\n---\n\n## Your task this turn\n"
-        + _directive(verdict, advanced, completed)
+        + _directive(verdict, advanced, completed, track_of(step))
     )
     return provider.coach_stream(system=system, messages=transcript)

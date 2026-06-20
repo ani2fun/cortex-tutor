@@ -45,6 +45,9 @@ class Session(Base):
     user_sub: Mapped[str] = mapped_column(Text)
     problem_id: Mapped[str] = mapped_column(Text)
     origin: Mapped[str] = mapped_column(String)
+    # Which coaching ladder this session runs: 'problem' (six coding steps) or 'conceptual' (four
+    # understanding steps). Pinned at creation; carried forward on reset. See tutor.domain.steps.Track.
+    track: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String)
     current_step: Mapped[str] = mapped_column(String)
     step_index: Mapped[int] = mapped_column(Integer)
