@@ -13,12 +13,16 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import jwt
+import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientError
 
 from tutor.config import Settings, get_settings
 from tutor.models.catalog import Tier
+
+log = structlog.get_logger()
 
 
 @dataclass(frozen=True)
@@ -33,16 +37,33 @@ _bearer = HTTPBearer(auto_error=False)
 _jwks_clients: dict[str, PyJWKClient] = {}
 
 
+# Keycloak sits behind Cloudflare, whose bot protection 403s PyJWT's default urllib User-Agent
+# ("Python-urllib/X" — a known-bot signature) while letting the cortex Scala server's Nimbus/Java client
+# through. That asymmetry was the whole outage: the tutor's JWKS fetch got a 403 it couldn't resolve, so
+# every signed-in token failed validation. A real User-Agent gets the fetch past the edge. (Belt-and-
+# suspenders — the proper fix is a Cloudflare "skip" rule for the public OIDC endpoints; see the runbook.)
+_JWKS_HEADERS = {
+    "User-Agent": "cortex-tutor/1.0 (JWKS fetch; +https://cortex.kakde.eu)",
+    "Accept": "application/json",
+}
+
+
 def _jwks_client(jwks_url: str) -> PyJWKClient:
     client = _jwks_clients.get(jwks_url)
     if client is None:
-        client = PyJWKClient(jwks_url, cache_keys=True, lifespan=300)
+        client = PyJWKClient(jwks_url, cache_keys=True, lifespan=300, headers=_JWKS_HEADERS)
         _jwks_clients[jwks_url] = client
     return client
 
 
 def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
+def _auth_unavailable(detail: str) -> HTTPException:
+    # 503 (not 500): the server can't validate the token right now — a dependency failure (JWKS
+    # unreachable), not a bad request. Lets callers/monitoring tell "broken token" from "broken infra".
+    return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)
 
 
 async def verify_jwt(
@@ -56,8 +77,22 @@ async def verify_jwt(
     if creds is None:
         raise _unauthorized("Missing bearer token")
     token = creds.credentials
+
+    # Resolve the token's signing key from Keycloak's JWKS. A failure HERE is the server's inability to
+    # validate — the JWKS endpoint is unreachable from this pod, or the key id isn't published — NOT a
+    # bad token. PyJWT raises PyJWKClientError (incl. PyJWKClientConnectionError); letting it escape
+    # makes a bare 500 that the SPA reads as "tutor unavailable" and silently degrades the Coach to its
+    # static fallback for every signed-in user. Map it to 503 + a structured log so it's diagnosable.
+    # (A malformed token whose header yields no key id is a client error → 401, as before.)
     try:
         signing_key = _jwks_client(settings.jwks_url).get_signing_key_from_jwt(token).key
+    except PyJWKClientError as exc:
+        log.error("tutor.jwks_unavailable", error=str(exc), jwks_url=settings.jwks_url)
+        raise _auth_unavailable("Auth temporarily unavailable — cannot reach the identity provider") from None
+    except jwt.InvalidTokenError as exc:
+        raise _unauthorized(f"Invalid token: {exc}") from None
+
+    try:
         claims = jwt.decode(
             token,
             signing_key,

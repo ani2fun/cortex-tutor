@@ -98,6 +98,28 @@ def test_whoami_requires_bearer_when_auth_enabled(monkeypatch: pytest.MonkeyPatc
     get_settings.cache_clear()
 
 
+def test_whoami_jwks_unreachable_is_503_not_500(monkeypatch: pytest.MonkeyPatch):
+    # Regression (prod incident): when Keycloak's JWKS can't be resolved — endpoint unreachable from
+    # the pod, or the key id isn't published — PyJWT raises PyJWKClientError. It must surface as a
+    # clean 503, NOT a bare 500: the SPA reads any non-401 whoami failure as "tutor unavailable" and
+    # silently degrades the Coach to its static fallback for EVERY signed-in user.
+    from jwt.exceptions import PyJWKClientError
+
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+
+    class _BoomClient:
+        def get_signing_key_from_jwt(self, token: str):
+            raise PyJWKClientError("Unable to fetch/find a signing key")
+
+    import tutor.auth as auth
+
+    monkeypatch.setattr(auth, "_jwks_client", lambda url: _BoomClient())
+    with _client("true") as c:
+        r = c.get("/v1/whoami", headers={"Authorization": "Bearer dummy.jwt.token"})
+    get_settings.cache_clear()
+    assert r.status_code == 503
+
+
 @pytest.mark.parametrize("bad_model", ["gpt-4", "claude-opus", "does-not-exist"])
 def test_create_session_rejects_unknown_model(dev_client: TestClient, bad_model: str):
     # Never trust a client-supplied model id: unknown keys fail closed BEFORE any DB work (so this
