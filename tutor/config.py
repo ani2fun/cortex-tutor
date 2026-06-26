@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     keycloak_issuer_url: str = "https://keycloak.kakde.eu/realms/apps-prod"
     keycloak_client_id: str = "cortex-web"
+    # Override for the JWKS *fetch* URL only. Default (None) derives it from the issuer — the PUBLIC
+    # Keycloak, which sits behind Cloudflare. Point this at the IN-CLUSTER Keycloak Service (e.g.
+    # http://keycloak.identity.svc.cluster.local/realms/apps-prod/protocol/openid-connect/certs) so
+    # server-side token validation fetches keys directly and never hairpins out through the public edge,
+    # whose bot protection (Browser Integrity Check / Bot Fight Mode) 403s a non-browser client and breaks
+    # auth. The `iss` claim is still validated against keycloak_issuer_url (the public URL tokens carry).
+    keycloak_jwks_url: str | None = None
 
     # ── Anthropic / models ──
     anthropic_api_key: str | None = None
@@ -72,6 +79,9 @@ class Settings(BaseSettings):
 
     @property
     def jwks_url(self) -> str:
+        # Explicit override (the in-cluster Keycloak) wins; else derive from the public issuer.
+        if self.keycloak_jwks_url:
+            return self.keycloak_jwks_url
         return f"{self.keycloak_issuer_url.rstrip('/')}/protocol/openid-connect/certs"
 
 

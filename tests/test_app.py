@@ -120,6 +120,24 @@ def test_whoami_jwks_unreachable_is_503_not_500(monkeypatch: pytest.MonkeyPatch)
     assert r.status_code == 503
 
 
+def test_jwks_url_override_bypasses_public_issuer(monkeypatch: pytest.MonkeyPatch):
+    # KEYCLOAK_JWKS_URL points the *fetch* at the in-cluster Keycloak (bypassing the Cloudflare-fronted
+    # public edge), while the iss check stays on the public issuer. Default (unset) derives from issuer.
+    internal = "http://keycloak.identity.svc.cluster.local/realms/apps-prod/protocol/openid-connect/certs"
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEYCLOAK_ISSUER_URL", "https://keycloak.kakde.eu/realms/apps-prod")
+
+    monkeypatch.delenv("KEYCLOAK_JWKS_URL", raising=False)
+    assert get_settings().jwks_url == "https://keycloak.kakde.eu/realms/apps-prod/protocol/openid-connect/certs"
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEYCLOAK_JWKS_URL", internal)
+    s = get_settings()
+    assert s.jwks_url == internal  # fetch goes internal …
+    assert s.keycloak_issuer_url == "https://keycloak.kakde.eu/realms/apps-prod"  # … iss check unchanged
+    get_settings.cache_clear()
+
+
 @pytest.mark.parametrize("bad_model", ["gpt-4", "claude-opus", "does-not-exist"])
 def test_create_session_rejects_unknown_model(dev_client: TestClient, bad_model: str):
     # Never trust a client-supplied model id: unknown keys fail closed BEFORE any DB work (so this
