@@ -77,8 +77,9 @@ def test_whoami_byok_tier_lists_models(monkeypatch: pytest.MonkeyPatch):
         body = c.get("/v1/whoami").json()
     get_settings.cache_clear()
     assert body["tier"] == "byok"
-    assert body["defaultModel"] == "or-claude-sonnet"  # the OpenRouter BYOK default (Claude Sonnet)
+    assert body["defaultModel"] == "or-glm-5.2"  # the OpenRouter BYOK default (GLM 5.2)
     assert {m["key"] for m in body["availableModels"]} == {
+        "or-glm-5.2",
         "or-claude-sonnet",
         "or-gpt-4.1",
         "or-gemini-flash",

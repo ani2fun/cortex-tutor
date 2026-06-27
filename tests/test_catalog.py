@@ -3,7 +3,7 @@
 Product model: cloud models (OpenRouter + Anthropic-direct) are selectable by EVERY tier — the
 operator funds a cloud pick with their own key (client-direct), like an external user — while the
 local wk-1 `qwen-coach` is homelab-only and gated on the Ollama backend (has_local). Default coach:
-homelab → the local model, byok → Claude Sonnet via OpenRouter (the primary BYOK path).
+homelab → the local model, byok → GLM 5.2 via OpenRouter (the primary BYOK path).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ def test_byok_catalog_is_openrouter_first_then_anthropic_direct():
     # BYOK users pick any curated model: OpenRouter entries (primary) then Anthropic-direct (purist).
     # Under dual-mode the operator (homelab) can pick these too — funded by their own key.
     assert [e.key for e in catalog.available_models(Tier.BYOK)] == [
+        "or-glm-5.2",
         "or-claude-sonnet",
         "or-gpt-4.1",
         "or-gemini-flash",
@@ -37,6 +38,7 @@ def test_byok_catalog_is_openrouter_first_then_anthropic_direct():
 def test_openrouter_entries_selectable_all_tiers_with_live_slugs():
     # The curated OpenRouter set: provider=OPENROUTER, selectable by every tier, model_id = live slug.
     expected = {
+        "or-glm-5.2": "z-ai/glm-5.2",
         "or-claude-sonnet": "anthropic/claude-sonnet-4.6",
         "or-gpt-4.1": "openai/gpt-4.1",
         "or-gemini-flash": "google/gemini-2.5-flash",
@@ -71,16 +73,16 @@ def test_homelab_sees_local_plus_cloud_under_dual_mode():
     assert byok == [e.key for e in catalog.available_models(Tier.BYOK)]
 
 
-def test_default_is_local_for_homelab_and_openrouter_claude_sonnet_for_byok():
+def test_default_is_local_for_homelab_and_glm_5_2_for_byok():
     assert catalog.default_model(Tier.HOMELAB).key == "qwen-coach"
-    assert catalog.default_model(Tier.BYOK).key == "or-claude-sonnet"
+    assert catalog.default_model(Tier.BYOK).key == "or-glm-5.2"
 
 
 # ── validate_choice: fail closed ─────────────────────────────────────────────────────────────
 
 
 def test_validate_choice_none_returns_tier_default():
-    assert catalog.validate_choice(None, Tier.BYOK).key == "or-claude-sonnet"
+    assert catalog.validate_choice(None, Tier.BYOK).key == "or-glm-5.2"
     assert catalog.validate_choice(None, Tier.HOMELAB, has_local=True).key == "qwen-coach"
 
 
@@ -136,10 +138,10 @@ def test_resolve_byok_openrouter_is_client_direct_with_slug():
     assert (res.entry.key, res.entry.model_id) == ("or-gemini-flash", "google/gemini-2.5-flash")
 
 
-def test_resolve_byok_none_key_uses_openrouter_claude_sonnet_default():
+def test_resolve_byok_none_key_uses_glm_5_2_default():
     res = _resolve(Tier.BYOK, key=None, server_key=False)
-    assert (res.entry.key, res.mode) == ("or-claude-sonnet", CredentialMode.CLIENT_DIRECT)
-    assert res.entry.model_id == "anthropic/claude-sonnet-4.6"  # the OpenRouter slug handed to the client
+    assert (res.entry.key, res.mode) == ("or-glm-5.2", CredentialMode.CLIENT_DIRECT)
+    assert res.entry.model_id == "z-ai/glm-5.2"  # the OpenRouter slug handed to the client
 
 
 def test_resolve_homelab_selected_local_streams_when_configured():

@@ -70,6 +70,13 @@ _HOMELAB_ONLY = frozenset({Tier.HOMELAB})
 # model is homelab-only and only surfaces when OLLAMA_URL is set (the `has_local` gate below).
 _CATALOG: dict[str, CatalogEntry] = {
     # ── OpenRouter (BYOK primary): one key, any model, browser-direct. ────────────────────────────
+    "or-glm-5.2": CatalogEntry(
+        key="or-glm-5.2",
+        provider=Provider.OPENROUTER,
+        model_id="z-ai/glm-5.2",
+        allowed_tiers=_CLOUD_TIERS,
+        display="GLM 5.2 (OpenRouter)",
+    ),
     "or-claude-sonnet": CatalogEntry(
         key="or-claude-sonnet",
         provider=Provider.OPENROUTER,
@@ -134,9 +141,9 @@ _CATALOG: dict[str, CatalogEntry] = {
     ),
 }
 
-# Per-tier default coach model: homelab → the local wk-1 model; byok → Claude Sonnet via OpenRouter
+# Per-tier default coach model: homelab → the local wk-1 model; byok → GLM 5.2 via OpenRouter
 # (the primary BYOK path — one key, any model; the strongest coach makes it the default pick).
-_DEFAULT_BY_TIER: dict[Tier, str] = {Tier.HOMELAB: "qwen-coach", Tier.BYOK: "or-claude-sonnet"}
+_DEFAULT_BY_TIER: dict[Tier, str] = {Tier.HOMELAB: "qwen-coach", Tier.BYOK: "or-glm-5.2"}
 
 
 class ModelNotAllowed(ValueError):
@@ -161,7 +168,7 @@ def available_models(tier: Tier, *, has_local: bool = False) -> list[CatalogEntr
 
 
 def default_model(tier: Tier) -> CatalogEntry:
-    """The default coach model: homelab → local wk-1 model, byok → Claude Sonnet (OpenRouter)."""
+    """The default coach model: homelab → local wk-1 model, byok → GLM 5.2 (OpenRouter)."""
     entry = _CATALOG[_DEFAULT_BY_TIER[tier]]
     assert tier in entry.allowed_tiers, f"default for tier {tier} not allowed for that tier"
     return entry
